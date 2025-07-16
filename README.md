@@ -5,14 +5,11 @@ A modular web scraping application that crawls specified domains and converts HT
 ## Features
 
 - **Modular Architecture**: Clean separation of concerns with dedicated modules for crawling, HTML processing, document conversion, and file management
-- **Streaming Processing**: Pages are processed immediately after crawling for faster feedback and reduced memory usage
 - **Multiple Output Formats**: Support for Markdown, HTML, and DOCX output formats
 - **Advanced HTML Cleaning**: Global and domain-specific HTML cleaning with CSS-based element removal
 - **JavaScript Execution**: Support for JavaScript execution with wait conditions for dynamic content
 - **Domain Auto-Detection**: Automatically applies domain-specific settings when encountering configured domains
-- **Link Preservation**: Converts HTML links to Markdown format while preserving existing markdown links
 - **Configurable Processing**: Flexible YAML-based configuration system
-- **Windows Compatible**: Handles Windows file system limitations with retry logic
 
 ## Quick Start
 
@@ -212,20 +209,7 @@ domains:
 - **Only include filtering**: Keep only content from specified CSS classes
 - **CSS hidden element removal**: Automatically remove elements hidden by CSS
 
-### Link Processing
-- Converts relative URLs to absolute URLs
-- Filters out image links and section URLs
-- Preserves existing markdown links in HTML content
-- Configurable exclusion patterns
 
-## Error Handling
-
-The application includes comprehensive error handling:
-- Configuration validation before crawling
-- Graceful handling of inaccessible domains
-- Per-page error tracking without stopping the process
-- Windows-specific file operation handling
-- Automatic cleanup of temporary files
 
 ## Output
 

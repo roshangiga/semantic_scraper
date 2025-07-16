@@ -48,6 +48,10 @@ class WebCrawler:
             start_urls = domain_config.get('start_urls', [])
             for url in start_urls:
                 if url not in self.visited_urls:
+                    # Skip section URLs (with # fragments) if configured
+                    if self.config.get('exclude_section_urls', True) and '#' in url:
+                        continue
+                    
                     self.visited_urls.add(url)
                     self.queue.append(url)
     
@@ -138,8 +142,10 @@ class WebCrawler:
                 print(f"Warning: No content received from {url}")
                 return None
             
+            # Always use the original requested URL, not any URL that might have been modified by JavaScript
+            # This prevents saving files with fragment identifiers when the page redirects
             return {
-                'url': url,
+                'url': url,  # Use the original URL we requested
                 'html': result.cleaned_html,
                 'domain_config': domain_config
             }
@@ -186,7 +192,7 @@ class WebCrawler:
                     href not in self.visited_urls):
                     
                     # Skip section URLs (with # fragments) if configured
-                    if self.config.get('exclude_section_urls', True) and parsed_href.fragment:
+                    if self.config.get('exclude_section_urls', True) and '#' in href:
                         continue
                     
                     # Allow URLs from:
@@ -222,6 +228,11 @@ class WebCrawler:
         # Process queue with streaming
         while self.queue and pages_crawled < max_pages:
             url = self.queue.popleft()
+            
+            # Skip section URLs (with # fragments) if configured
+            if self.config.get('exclude_section_urls', True) and '#' in url:
+                continue
+            
             print(f"🌐 Crawling: {url} ({pages_crawled + 1}/{max_pages})")
             
             # Get domain config - use specific config if available, otherwise use default
@@ -287,6 +298,11 @@ class WebCrawler:
         
         while self.queue and pages_crawled < max_pages:
             url = self.queue.popleft()
+            
+            # Skip section URLs (with # fragments) if configured
+            if self.config.get('exclude_section_urls', True) and '#' in url:
+                continue
+            
             print(f"🌐 Crawling: {url} ({pages_crawled + 1}/{max_pages})")
             
             # Get domain config - use specific config if available, otherwise use default

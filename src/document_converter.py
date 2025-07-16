@@ -52,7 +52,13 @@ class DocumentConverter:
         markdown_content = conv_result.document.export_to_markdown(**markdown_params)
         
         # Apply post-processing to remove excluded sections
-        return self._post_process_markdown(markdown_content)
+        processed_content = self._post_process_markdown(markdown_content)
+        
+        # Remove duplicate sections if enabled
+        if self.markdown_processing_config.get('remove_duplicate_sections', True):
+            processed_content = self._remove_duplicate_sections(processed_content)
+        
+        return processed_content
     
     def convert_to_html(self, html_file_path: str) -> str:
         """
@@ -123,6 +129,70 @@ class DocumentConverter:
         markdown_content = re.sub(r'\n\s*\n\s*\n+', '\n\n', markdown_content)
         
         return markdown_content.strip()
+    
+    def _remove_duplicate_sections(self, markdown_content: str) -> str:
+        """
+        Remove duplicate sections from markdown content.
+        
+        Args:
+            markdown_content: Original markdown content
+            
+        Returns:
+            Processed markdown content with duplicates removed
+        """
+        import re
+        
+        # Split content into lines
+        lines = markdown_content.split('\n')
+        
+        # Track seen sections and their content
+        seen_sections = {}
+        result_lines = []
+        current_section = None
+        current_section_content = []
+        current_section_level = 0
+        
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            
+            # Check if this is a header line
+            header_match = re.match(r'^(#{1,6})\s+(.+)$', line)
+            
+            if header_match:
+                # Process previous section if exists
+                if current_section is not None:
+                    section_key = (current_section, '\n'.join(current_section_content).strip())
+                    if section_key not in seen_sections:
+                        # Add the section header
+                        result_lines.append('#' * current_section_level + ' ' + current_section)
+                        # Add the section content
+                        result_lines.extend(current_section_content)
+                        seen_sections[section_key] = True
+                
+                # Start new section
+                current_section_level = len(header_match.group(1))
+                current_section = header_match.group(2).strip()
+                current_section_content = []
+            else:
+                # Add line to current section content
+                if current_section is not None:
+                    current_section_content.append(line)
+                else:
+                    # Lines before any section
+                    result_lines.append(line)
+            
+            i += 1
+        
+        # Process the last section
+        if current_section is not None:
+            section_key = (current_section, '\n'.join(current_section_content).strip())
+            if section_key not in seen_sections:
+                result_lines.append('#' * current_section_level + ' ' + current_section)
+                result_lines.extend(current_section_content)
+        
+        # Join lines back together
+        return '\n'.join(result_lines)
     
     def convert_document(self, html_file_path: str, output_format: str) -> Any:
         """

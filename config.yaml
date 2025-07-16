@@ -4,10 +4,10 @@ crawler:
   crawl4ai:
     verbose: true
     bypass_cache: true
-    delay_before_return_html: 2.5
+    delay_before_return_html: 3
     js_only: false
     wait_for: null
-    max_pages: 5  # Maximum number of pages to crawl per domain
+    max_pages: 500  # Maximum number of pages to crawl per domain
     exclude_section_urls: true  # Skip URLs with # fragments (e.g., #tab-categories)
 
   # Docling settings
@@ -71,6 +71,7 @@ html_cleaning:
 
 # Markdown post-processing settings
 markdown_processing:
+  remove_duplicate_sections: true  # Remove duplicate sections with identical content
   sections_to_ignore:
     - "How can we help you?"
     - "Contact Us"

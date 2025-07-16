@@ -21,13 +21,14 @@ class FileManager:
         self.config = config
         self.html_output_dir = config.get('html_output_dir', 'crawled_html')
         self.pages_output_dir = config.get('pages_output_dir', 'crawled_pages')
+        self.pdf_output_dir = config.get('pdf_output_dir', 'crawled_pdf')
         self.filename_template = config.get('filename_template', '{sanitized_url}')
         self.delete_existing_folders = config.get('delete_existing_folders', False)
         self.use_domain_subfolders = config.get('use_domain_subfolders', True)
     
     def setup_directories(self) -> None:
         """Set up output directories."""
-        directories = [self.html_output_dir, self.pages_output_dir]
+        directories = [self.html_output_dir, self.pages_output_dir, self.pdf_output_dir]
         
         for directory in directories:
             if self.delete_existing_folders and os.path.exists(directory):
@@ -222,6 +223,35 @@ class FileManager:
             f.write(content)
         
         print(f"Saved DOCX: {file_path}")
+        return file_path
+    
+    def save_pdf_content(self, pdf_url: str, original_filename: str, content: str, output_format: str = 'markdown') -> str:
+        """
+        Save PDF extracted content to file.
+        
+        Args:
+            pdf_url: URL of the PDF file
+            original_filename: Original PDF filename
+            content: Extracted content to save
+            output_format: Format of the content ('markdown', 'html', etc.)
+            
+        Returns:
+            Path to saved file
+        """
+        # Create filename with original PDF name reference
+        extension = '.md' if output_format.lower() in ['markdown', 'md'] else f'.{output_format}'
+        filename = self._sanitize_url_for_filename(original_filename).replace('.pdf', '').replace('.PDF', '') + extension
+        file_path = self._get_output_path(self.pdf_output_dir, pdf_url, filename)
+        
+        # Add header with source information
+        if output_format.lower() in ['markdown', 'md']:
+            header = f"# Source PDF: {original_filename}\n# URL: {pdf_url}\n\n---\n\n"
+            content = header + content
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        
+        print(f"Saved PDF content: {file_path}")
         return file_path
     
     def save_processed_html(self, url: str, content: str) -> str:

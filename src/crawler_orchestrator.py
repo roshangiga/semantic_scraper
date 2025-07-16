@@ -11,6 +11,7 @@ from .web_crawler import WebCrawler
 from .html_processor import HTMLProcessor
 from .document_converter import DocumentConverter
 from .file_manager import FileManager
+from .pdf_processor import PDFProcessor
 
 
 class CrawlerOrchestrator:
@@ -34,6 +35,11 @@ class CrawlerOrchestrator:
             self.config.get('markdown_processing', {})
         )
         self.file_manager = FileManager(self.config.get('crawler', {}).get('file_manager', {}))
+        self.pdf_processor = PDFProcessor(
+            self.config.get('link_processing', {}),
+            self.config.get('markdown_processing', {}),
+            self.config.get('crawler', {}).get('docling', {})
+        )
         
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """
@@ -107,8 +113,14 @@ class CrawlerOrchestrator:
             print("❌ No domains configured")
             return {'error': 'No domains configured'}
         
-        # Initialize web crawler
+        # Initialize web crawler with combined config
         crawl_config = self.get_crawl4ai_config()
+        # Add link processing settings to crawler config
+        link_config = self.config.get('link_processing', {})
+        crawl_config.update({
+            'exclude_urls': link_config.get('exclude_urls', []),
+            'exclude_section_urls': link_config.get('exclude_section_urls', True)
+        })
         
         results = {'processed_pages': [], 'errors': [], 'stats': {}}
         
@@ -241,6 +253,38 @@ class CrawlerOrchestrator:
                 
                 # Save converted content
                 self.file_manager.save_content(url, converted_content, output_format)
+        
+        # Process PDF URLs if any were found
+        if 'pdf_urls' in crawl_result and crawl_result['pdf_urls']:
+            await self._process_pdf_urls(crawl_result['pdf_urls'], output_formats)
+    
+    async def _process_pdf_urls(self, pdf_urls: List[str], output_formats: List[str]) -> None:
+        """
+        Process PDF URLs by downloading and extracting content.
+        
+        Args:
+            pdf_urls: List of PDF URLs to process
+            output_formats: List of output formats to generate
+        """
+        for pdf_url in pdf_urls:
+            try:
+                # Process PDF
+                result = self.pdf_processor.process_pdf_url(pdf_url, output_formats)
+                
+                if result['success']:
+                    # Save content for each format
+                    for format_name, content in result['content'].items():
+                        self.file_manager.save_pdf_content(
+                            pdf_url, 
+                            result['filename'], 
+                            content, 
+                            format_name
+                        )
+                else:
+                    print(f"   ❌ Failed to process PDF: {pdf_url}")
+                    
+            except Exception as e:
+                print(f"   ❌ Error processing PDF {pdf_url}: {e}")
     
     async def crawl_domain(self, domain: str, output_formats: List[str] = None) -> Dict[str, Any]:
         """

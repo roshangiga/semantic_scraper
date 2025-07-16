@@ -2,3 +2,4 @@ crawl4ai
 docling
 beautifulsoup4
 PyYAML
+requests

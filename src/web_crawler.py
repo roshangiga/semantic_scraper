@@ -160,7 +160,7 @@ class WebCrawler:
                 print(f"Error crawling {url}: {e}")
             return None
     
-    def extract_links(self, html: str, base_url: str, allowed_domains: List[str], all_domains: List[Dict[str, Any]]) -> List[str]:
+    def extract_links(self, html: str, base_url: str, allowed_domains: List[str], all_domains: List[Dict[str, Any]]) -> Dict[str, List[str]]:
         """
         Extract links from HTML content.
         
@@ -171,9 +171,10 @@ class WebCrawler:
             all_domains: List of all domain configurations
             
         Returns:
-            List of discovered URLs
+            Dictionary with 'pages' and 'pdfs' lists
         """
         new_urls = []
+        pdf_urls = []
         soup = BeautifulSoup(html, 'html.parser')
         
         # Get all configured domain names for checking
@@ -195,6 +196,10 @@ class WebCrawler:
                     if self.config.get('exclude_section_urls', True) and '#' in href:
                         continue
                     
+                    # Check if URL should be excluded
+                    if self._is_url_excluded(href, all_domains):
+                        continue
+                    
                     # Allow URLs from:
                     # 1. Originally allowed domains (explicitly requested)
                     # 2. Configured domains (have settings in YAML)
@@ -203,9 +208,71 @@ class WebCrawler:
                     
                     if domain_allowed:
                         self.visited_urls.add(href)
-                        new_urls.append(href)
+                        
+                        # Check if this is a PDF URL
+                        if href.lower().endswith('.pdf'):
+                            pdf_urls.append(href)
+                        else:
+                            new_urls.append(href)
         
-        return new_urls
+        return {'pages': new_urls, 'pdfs': pdf_urls}
+    
+    def _is_url_excluded(self, url: str, domains: List[Dict[str, Any]]) -> bool:
+        """
+        Check if URL should be excluded based on global and domain-specific exclude patterns.
+        
+        Args:
+            url: URL to check
+            domains: List of domain configurations
+            
+        Returns:
+            True if URL should be excluded
+        """
+        # Get global exclude URLs from config
+        global_exclude_urls = self.config.get('exclude_urls', [])
+        
+        # Check global exclude patterns
+        for exclude_pattern in global_exclude_urls:
+            if self._url_matches_pattern(url, exclude_pattern):
+                return True
+        
+        # Get domain config for this URL
+        domain_config = self.get_domain_config(url, domains)
+        if domain_config:
+            # Check domain-specific exclude URLs
+            domain_exclude_urls = domain_config.get('exclude_urls', [])
+            for exclude_pattern in domain_exclude_urls:
+                if self._url_matches_pattern(url, exclude_pattern):
+                    return True
+        
+        return False
+    
+    def _url_matches_pattern(self, url: str, pattern: str) -> bool:
+        """
+        Check if URL matches a pattern (supports wildcards).
+        
+        Args:
+            url: URL to check
+            pattern: Pattern to match against
+            
+        Returns:
+            True if URL matches pattern
+        """
+        import fnmatch
+        
+        # Exact match
+        if url == pattern:
+            return True
+        
+        # Wildcard pattern matching
+        if '*' in pattern:
+            return fnmatch.fnmatch(url, pattern)
+        
+        # Substring match (if pattern starts with URL)
+        if url.startswith(pattern):
+            return True
+        
+        return False
     
     async def crawl_all_streaming(self, domains: List[Dict[str, Any]]):
         """
@@ -233,6 +300,11 @@ class WebCrawler:
             if self.config.get('exclude_section_urls', True) and '#' in url:
                 continue
             
+            # Check if URL should be excluded
+            if self._is_url_excluded(url, domains):
+                print(f"🚫 Excluding URL: {url}")
+                continue
+            
             print(f"🌐 Crawling: {url} ({pages_crawled + 1}/{max_pages})")
             
             # Get domain config - use specific config if available, otherwise use default
@@ -255,19 +327,36 @@ class WebCrawler:
                 
                 # Extract and queue new URLs (only if we haven't reached the limit)
                 if pages_crawled < max_pages:
-                    new_urls = self.extract_links(
+                    links = self.extract_links(
                         result['html'], 
                         url, 
                         allowed_domains,
                         domains
                     )
+                    new_urls = links['pages']
+                    pdf_urls = links['pdfs']
+                    
                     if new_urls:
                         print(f"   🔗 Found {len(new_urls)} new URLs to crawl")
                         for new_url in new_urls[:3]:  # Show first 3 URLs
                             print(f"      - {new_url}")
                         if len(new_urls) > 3:
                             print(f"      ... and {len(new_urls) - 3} more")
+                    
+                    if pdf_urls:
+                        print(f"   📄 Found {len(pdf_urls)} PDF URLs")
+                        for pdf_url in pdf_urls[:3]:  # Show first 3 PDF URLs
+                            print(f"      - {pdf_url}")
+                        if len(pdf_urls) > 3:
+                            print(f"      ... and {len(pdf_urls) - 3} more")
+                    
                     self.queue.extend(new_urls)
+                    # Add PDF URLs to result for processing
+                    result['pdf_urls'] = pdf_urls
+                
+                # Ensure pdf_urls is in result even if no new URLs found
+                if 'pdf_urls' not in result:
+                    result['pdf_urls'] = []
                 
                 # Yield result immediately for processing
                 yield result
@@ -303,6 +392,11 @@ class WebCrawler:
             if self.config.get('exclude_section_urls', True) and '#' in url:
                 continue
             
+            # Check if URL should be excluded
+            if self._is_url_excluded(url, domains):
+                print(f"🚫 Excluding URL: {url}")
+                continue
+            
             print(f"🌐 Crawling: {url} ({pages_crawled + 1}/{max_pages})")
             
             # Get domain config - use specific config if available, otherwise use default
@@ -325,19 +419,32 @@ class WebCrawler:
                 
                 # Extract and queue new URLs (only if we haven't reached the limit)
                 if pages_crawled < max_pages:
-                    new_urls = self.extract_links(
+                    links = self.extract_links(
                         result['html'], 
                         url, 
                         allowed_domains,
                         domains
                     )
+                    new_urls = links['pages']
+                    pdf_urls = links['pdfs']
+                    
                     if new_urls:
                         print(f"   🔗 Found {len(new_urls)} new URLs to crawl")
                         for new_url in new_urls[:3]:  # Show first 3 URLs
                             print(f"      - {new_url}")
                         if len(new_urls) > 3:
                             print(f"      ... and {len(new_urls) - 3} more")
+                    
+                    if pdf_urls:
+                        print(f"   📄 Found {len(pdf_urls)} PDF URLs")
+                        for pdf_url in pdf_urls[:3]:  # Show first 3 PDF URLs
+                            print(f"      - {pdf_url}")
+                        if len(pdf_urls) > 3:
+                            print(f"      ... and {len(pdf_urls) - 3} more")
+                    
                     self.queue.extend(new_urls)
+                    # Add PDF URLs to result for processing
+                    result['pdf_urls'] = pdf_urls
             else:
                 print(f"   ❌ Failed to crawl: {url}")
         

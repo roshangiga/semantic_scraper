@@ -27,6 +27,7 @@ crawler:
     delete_existing_folders: true
     html_output_dir: "crawled_html"
     pages_output_dir: "crawled_pages"
+    pdf_output_dir: "crawled_pdf"
     filename_template: "{sanitized_url}"
     use_domain_subfolders: true  # Create subdirectories for each domain
 
@@ -96,6 +97,10 @@ link_processing:
     - ".ico"
   exclude_section_urls: true  # URLs containing #
   convert_relative_to_absolute: true
+  process_pdf_links: true  # Download and extract PDF content
+  exclude_urls:  # Global URL patterns to exclude
+    - "**/login"
+    # Add more URL patterns to exclude here
 
 # Domain-specific configurations
 domains:
@@ -111,8 +116,16 @@ domains:
     html_classes_to_only_include:
       - ".mainhp"
     # Only include content from these classes if they exist, ignore if not found
-    comment_blocks_to_remove:
+    comment_blocks_to_remove: [ ]
       # Add domain-specific comment blocks here if needed
+    exclude_urls:  # Domain-specific URLs to exclude
+      - "**/sinformer/avisdedeces/**"
+      - "**/sinformer/foreignexchange**"
+      - "**/sinformer/loterie/**"
+      - "**/sinformer/loterie-vert/**"
+      - "**/dstv/sports-guide**"
+      - "**/new-world-sport-guide**"
+      # Add more domain-specific URLs to exclude here
 
   - domain: "devices.myt.mu"
     start_urls:
@@ -123,6 +136,7 @@ domains:
     html_classes_to_remove: [ ]
     comment_blocks_to_remove: [ ]
     html_classes_to_only_include: [ ]
+    exclude_urls: [ ]
 
   - domain: "esimtravel.myt.mu"
     start_urls:
@@ -140,4 +154,5 @@ domains:
     html_classes_to_remove: [ ]
     comment_blocks_to_remove: [ ]
     html_classes_to_only_include: [ ]
+    exclude_urls: [ ]
 

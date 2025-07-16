@@ -1,0 +1,142 @@
+# Web Crawler Configuration
+crawler:
+  # Crawl4AI settings
+  crawl4ai:
+    verbose: true
+    bypass_cache: true
+    delay_before_return_html: 2.5
+    js_only: false
+    wait_for: null
+    max_pages: 5  # Maximum number of pages to crawl per domain
+    exclude_section_urls: true  # Skip URLs with # fragments (e.g., #tab-categories)
+
+  # Docling settings
+  docling:
+    markdown:
+      include_annotations: true
+      mark_annotations: true
+      escape_underscores: true
+      image_placeholder: "<!-- image -->"
+      enable_chart_tables: true
+    html:
+      include_annotations: true
+      formula_to_mathml: true
+
+  # File management settings
+  file_manager:
+    delete_existing_folders: true
+    html_output_dir: "crawled_html"
+    pages_output_dir: "crawled_pages"
+    filename_template: "{sanitized_url}"
+    use_domain_subfolders: true  # Create subdirectories for each domain
+
+  # Output formats
+  output_formats:
+    - "markdown"
+    # - "html" # Enable if needed
+    # - "docx"  # Enable if needed
+
+# Global HTML cleaning settings (applied to all domains)
+html_cleaning:
+  remove_css_hidden_elements: true  # Remove elements hidden by CSS styles (display:none, visibility:hidden)
+  html_elements_to_remove:
+    - "head"
+    - "header"
+    - "footer"
+    - "nav"
+    - "aside"
+  html_classes_to_remove:
+    - ".sidebar"
+    - ".navbar"
+    - ".header"
+    - ".footer"
+    - ".hidden"
+    - ".hide"
+    - ".d-none"
+    - ".invisible"
+    - ".sr-only"
+    - ".screen-reader-only"
+    - "[style*='display: none']"
+    - "[style*='display:none']"
+    - "[style*='visibility: hidden']"
+    - "[style*='visibility:hidden']"
+  comment_blocks_to_remove:
+    - [ "<!-- Cookie -->", "<!-- Cookie -->" ]
+    - [ "<!-- Footer Content -->", "<!-- End Footer Content -->" ]
+    - [ "<!-- Copyright Footer -->", "<!-- End Copyright Footer -->" ]
+    - [ "<!-- start banner -->", "<!-- end banner -->" ]
+    - [ "<!-- start scroll progress -->", "<!-- end scroll progress -->" ]
+    - [ "<!-- start header -->", "<!-- start section -->" ]
+    - [ "<!-- card-mobile -->", "<!-- End card-mobile -->" ]
+
+# Markdown post-processing settings
+markdown_processing:
+  sections_to_ignore:
+    - "How can we help you?"
+    - "Contact Us"
+    - "Infos"
+    - "Quick links"
+    - "Shop by products &amp; services"
+    # Add more section titles to ignore here
+    # Examples:
+    # - "Contact Us"
+    # - "Related Articles"
+
+# Link processing settings
+link_processing:
+  exclude_image_extensions:
+    - ".jpg"
+    - ".jpeg"
+    - ".png"
+    - ".gif"
+    - ".bmp"
+    - ".svg"
+    - ".webp"
+    - ".ico"
+  exclude_section_urls: true  # URLs containing #
+  convert_relative_to_absolute: true
+
+# Domain-specific configurations
+domains:
+  - domain: "myt.mu"
+    start_urls:
+      - "https://myt.mu/"
+    js_code: |
+      document.querySelectorAll('header, footer, nav, aside, .sidebar, .navbar, .header, .footer, style, script').forEach(el => el.remove());
+    html_elements_to_remove: [ ]
+    # Add domain-specific elements here if needed
+    html_classes_to_remove: [ ]
+    # Add domain-specific classes here if needed
+    html_classes_to_only_include:
+      - ".mainhp"
+    # Only include content from these classes if they exist, ignore if not found
+    comment_blocks_to_remove:
+      # Add domain-specific comment blocks here if needed
+
+  - domain: "devices.myt.mu"
+    start_urls:
+      - "https://devices.myt.mu/"
+    js_code: |
+      document.querySelectorAll('header, footer, nav, aside, .sidebar, .navbar, .header, .footer, style, script').forEach(el => el.remove());
+    html_elements_to_remove: [ ]
+    html_classes_to_remove: [ ]
+    comment_blocks_to_remove: [ ]
+    html_classes_to_only_include: [ ]
+
+  - domain: "esimtravel.myt.mu"
+    start_urls:
+      - "https://esimtravel.myt.mu/"
+    js_code: |
+      (async () => {
+      document.querySelectorAll('p.text-font-text.text-esim_blue_light').forEach(v => v.textContent.includes('View More') && v.click?.());
+      await new Promise(r => setTimeout(r, 1000));
+      document.querySelectorAll('.p-panel-header').forEach(h => h.click?.());
+      await new Promise(r => setTimeout(r, 2000));
+      document.body.insertAdjacentHTML('beforeend', '<div class="js-execution-complete">JS code executed</div>');
+      })();
+    wait_for: "js:() => document.querySelectorAll('.js-execution-complete').length > 0"
+    html_elements_to_remove: [ ]
+    html_classes_to_remove: [ ]
+    comment_blocks_to_remove: [ ]
+    html_classes_to_only_include: [ ]
+

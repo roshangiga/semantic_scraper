@@ -126,7 +126,7 @@ def validate_config_file(config_path: str) -> bool:
         return False
     
     try:
-        with open(config_path, 'r') as f:
+        with open(config_path, 'r', encoding='utf-8') as f:
             f.read()
         return True
     except PermissionError:

@@ -24,7 +24,7 @@ class CrawlerWrapper:
         """Load progress from previous runs."""
         if os.path.exists('crawler_progress.json'):
             try:
-                with open('crawler_progress.json', 'r') as f:
+                with open('crawler_progress.json', 'r', encoding='utf-8') as f:
                     return json.load(f)
             except:
                 return {'restarts': 0, 'last_crash_url': None, 'crash_urls': []}
@@ -38,7 +38,7 @@ class CrawlerWrapper:
             'crash_urls': crash_urls or [],
             'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
         }
-        with open('crawler_progress.json', 'w') as f:
+        with open('crawler_progress.json', 'w', encoding='utf-8') as f:
             json.dump(progress, f, indent=2)
     
     def run_crawler(self, args):
@@ -63,7 +63,7 @@ class CrawlerWrapper:
         while restart_count < self.max_restarts:
             try:
                 # Build command
-                cmd = [sys.executable, 'main_new.py'] + args
+                cmd = [sys.executable, '-X', 'utf8', 'main_new.py'] + args
                 if restart_count > 0:
                     cmd.append('--resume')  # Resume from checkpoint on restart
                 
@@ -71,8 +71,16 @@ class CrawlerWrapper:
                 print("-" * 60)
                 
                 # Run crawler and capture output to detect crash URL
-                process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
-                                         text=True, bufsize=1, universal_newlines=True)
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    universal_newlines=True,
+                    encoding='utf-8',
+                    errors='replace'
+                )
                 
                 output_lines = []
                 try:

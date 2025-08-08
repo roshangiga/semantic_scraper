@@ -438,7 +438,7 @@ class WebCrawler:
             'visited_urls': list(visited_urls),
             'crawl_queue': list(crawl_queue)
         }
-        with open('crawler_checkpoint.json', 'w') as f:
+        with open('crawler_checkpoint.json', 'w', encoding='utf-8') as f:
             json.dump(checkpoint, f)
     
     def load_checkpoint(self):
@@ -447,7 +447,7 @@ class WebCrawler:
         import os
         if os.path.exists('crawler_checkpoint.json'):
             try:
-                with open('crawler_checkpoint.json', 'r') as f:
+                with open('crawler_checkpoint.json', 'r', encoding='utf-8') as f:
                     checkpoint = json.load(f)
                 print(f"📥 Loaded checkpoint with {len(checkpoint['visited_urls'])} visited URLs")
                 return set(checkpoint['visited_urls']), deque(checkpoint['crawl_queue'])

@@ -154,7 +154,9 @@ domains:
       document.querySelectorAll('header, footer, nav, aside, .sidebar, .navbar, .header, .footer, style, script').forEach(el => el.remove());
     html_elements_to_remove: [ ]
     html_classes_to_remove: [ ]
-    comment_blocks_to_remove: [ ]
+    comment_blocks_to_remove:
+      - [ "<!-- ADD SIDEBAR HERE -->", "<!-- end section -->" ]
+
     html_classes_to_only_include: [ ]
     exclude_urls: [ ]
 

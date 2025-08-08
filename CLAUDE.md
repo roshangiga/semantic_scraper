@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a modular web scraping application that crawls specified domains and converts HTML content to various formats (Markdown, HTML, DOCX). It features a clean architecture with separation of concerns, configurable settings, flexible output options, and streaming processing for immediate page conversion.
+Robust web scraping application with crash recovery that crawls domains and converts content to Markdown/HTML/DOCX. Features automatic retry mechanisms, checkpoint system, duplicate removal, and PDF processing.
 
 ## Setup Instructions
 
@@ -18,9 +18,11 @@ This is a modular web scraping application that crawls specified domains and con
    crawl4ai-setup
    ```
 
-3. Run the crawler:
+3. Run the crawler (recommended with crash recovery):
    ```bash
-   python main_new.py
+   crawl.bat
+   # or
+   python crawler_wrapper.py
    ```
 
 ## Core Dependencies
@@ -245,26 +247,23 @@ The application includes comprehensive error handling:
 
 ## Key Features
 
-### Streaming Processing
-- Pages are processed immediately after crawling instead of waiting for all pages to be crawled
-- Reduces memory usage and provides faster feedback
-- Real-time progress reporting with detailed logging
+### Crash Recovery System
+- **crawler_wrapper.py**: Automatically restarts on crashes with exit code detection
+- **Checkpoint System**: Saves progress every 10 pages, resumes from crash point
+- **Problematic URL Detection**: Automatically identifies and excludes crash-causing URLs
+- **Smart Retry**: 3 attempts per page with configurable delays
 
-### Advanced Configuration
-- Global HTML cleaning settings merged with domain-specific settings
-- JavaScript execution with wait conditions for dynamic content
-- Markdown post-processing to remove unwanted sections
-- Domain subfolder organization for output files
+### Content Processing
+- **Duplicate Removal**: Lines, files, and sections with configurable options
+- **PDF Processing**: Extracts and converts PDF content to markdown
+- **Blank File Cleanup**: Removes files with only source headers
+- **Advanced HTML Cleaning**: CSS-based element removal with domain-specific rules
 
-### Domain Auto-Detection
-- Automatically applies domain-specific settings when encountering configured domains
-- Supports crawling across multiple configured domains in a single run
-- Graceful fallback to default settings for unconfigured domains
-
-### Windows Compatibility
-- Handles Windows file system limitations
-- Retry logic for file operations
-- Proper asyncio event loop management
+### Monitoring & Recovery
+- **Failed URL Tracking**: Saves failed URLs to `failed_urls.txt`
+- **Progress Reports**: Real-time status and completion statistics  
+- **Automatic Exclusion**: Problematic URLs saved to `problematic_urls.txt`
+- **Resume Capability**: `--resume` flag to continue from checkpoints
 
 ## Legacy Code
 

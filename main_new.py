@@ -20,7 +20,7 @@ if sys.platform == 'win32':
     warnings.filterwarnings("ignore", category=ResourceWarning, message="unclosed transport")
     warnings.filterwarnings("ignore", category=ResourceWarning, message="unclosed.*pipe")
 
-from src.crawler_orchestrator import CrawlerOrchestrator
+from src.scraper.crawler_orchestrator import CrawlerOrchestrator
 
 
 def create_argument_parser():

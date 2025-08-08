@@ -4,11 +4,15 @@ crawler:
   crawl4ai:
     verbose: true
     bypass_cache: true
-    delay_before_return_html: 3
+    delay_before_return_html: 2
     js_only: false
     wait_for: null
     max_pages: 500  # Maximum number of pages to crawl per domain
     exclude_section_urls: true  # Skip URLs with # fragments (e.g., #tab-categories)
+    follow_pdf_redirects: true  # Follow redirects to PDF files
+    max_retries: 3  # Maximum number of retries for failed pages
+    retry_delay: 5  # Delay in seconds between retries
+    save_checkpoint_every: 10  # Save checkpoint every N pages
 
   # Docling settings
   docling:
@@ -73,12 +77,17 @@ html_cleaning:
 # Markdown post-processing settings
 markdown_processing:
   remove_duplicate_sections: true  # Remove duplicate sections with identical content
+  remove_duplicate_lines: true  # Remove duplicate lines within each markdown file (excluding Source: line)
+  remove_duplicate_files: true  # Remove duplicate files based on content (excluding Source: line)
+  remove_blank_files: true  # Remove markdown files that only contain the Source: line
   sections_to_ignore:
     - "How can we help you?"
     - "Contact Us"
     - "Infos"
     - "Quick links"
     - "Shop by products &amp; services"
+    - "my.t support"
+    - "Related Products"
     # Add more section titles to ignore here
     # Examples:
     # - "Contact Us"
@@ -108,7 +117,18 @@ domains:
     start_urls:
       - "https://myt.mu/"
     js_code: |
+      // Remove unwanted elements
       document.querySelectorAll('header, footer, nav, aside, .sidebar, .navbar, .header, .footer, style, script').forEach(el => el.remove());
+      
+      // Detect if we're on a PDF page and add metadata
+      if (window.location.href.includes('.pdf')) {
+        // Create a marker element that indicates this is a PDF redirect
+        const marker = document.createElement('div');
+        marker.id = 'pdf-redirect-marker';
+        marker.setAttribute('data-pdf-url', window.location.href);
+        marker.textContent = 'PDF_REDIRECT:' + window.location.href;
+        document.body.insertBefore(marker, document.body.firstChild);
+      }
     html_elements_to_remove: [ ]
     # Add domain-specific elements here if needed
     html_classes_to_remove: [ ]

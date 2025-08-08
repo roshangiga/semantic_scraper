@@ -58,6 +58,10 @@ class DocumentConverter:
         if self.markdown_processing_config.get('remove_duplicate_sections', True):
             processed_content = self._remove_duplicate_sections(processed_content)
         
+        # Remove duplicate lines within the file if enabled
+        if self.markdown_processing_config.get('remove_duplicate_lines', False):
+            processed_content = self._remove_duplicate_lines(processed_content)
+        
         return processed_content
     
     def convert_to_html(self, html_file_path: str) -> str:
@@ -193,6 +197,51 @@ class DocumentConverter:
         
         # Join lines back together
         return '\n'.join(result_lines)
+    
+    def _remove_duplicate_lines(self, markdown_content: str) -> str:
+        """
+        Remove duplicate lines from markdown content, preserving the first occurrence.
+        Excludes the first line (Source: line) from duplicate detection.
+        
+        Args:
+            markdown_content: Original markdown content
+            
+        Returns:
+            Processed markdown content with duplicate lines removed
+        """
+        lines = markdown_content.split('\n')
+        
+        if not lines:
+            return markdown_content
+        
+        result_lines = []
+        first_line = None
+        
+        # Check if first line is a Source: line
+        if lines and lines[0].startswith('# Source:'):
+            first_line = lines[0]
+            lines = lines[1:]  # Process remaining lines
+        
+        # Track seen lines to remove duplicates
+        seen_lines = set()
+        
+        for line in lines:
+            # Normalize line for comparison (strip whitespace)
+            normalized_line = line.strip()
+            
+            # Keep empty lines but don't deduplicate them
+            if not normalized_line:
+                result_lines.append(line)
+            # Only add non-empty lines if we haven't seen them before
+            elif normalized_line not in seen_lines:
+                result_lines.append(line)
+                seen_lines.add(normalized_line)
+        
+        # Reconstruct the content
+        if first_line is not None:
+            return first_line + '\n' + '\n'.join(result_lines)
+        else:
+            return '\n'.join(result_lines)
     
     def convert_document(self, html_file_path: str, output_format: str) -> Any:
         """

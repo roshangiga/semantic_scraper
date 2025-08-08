@@ -34,7 +34,10 @@ class CrawlerOrchestrator:
             self.config.get('crawler', {}).get('docling', {}),
             self.config.get('markdown_processing', {})
         )
-        self.file_manager = FileManager(self.config.get('crawler', {}).get('file_manager', {}))
+        self.file_manager = FileManager(
+            self.config.get('crawler', {}).get('file_manager', {}),
+            self.config.get('markdown_processing', {})
+        )
         self.pdf_processor = PDFProcessor(
             self.config.get('link_processing', {}),
             self.config.get('markdown_processing', {}),
@@ -129,25 +132,37 @@ class CrawlerOrchestrator:
         print(f"⏱️  Delay before HTML capture: {crawl_config.get('delay_before_return_html', 2.5)}s")
         print(f"🔄 Bypass cache: {crawl_config.get('bypass_cache', True)}")
         print(f"🚫 Exclude section URLs (#): {crawl_config.get('exclude_section_urls', True)}")
+        print(f"🔁 Max retries per page: {crawl_config.get('max_retries', 3)}")
+        print(f"⏰ Retry delay: {crawl_config.get('retry_delay', 5)}s")
         print("-" * 60)
         
         async with WebCrawler(crawl_config) as crawler:
             # Process pages as they are crawled (streaming approach)
             page_count = 0
-            async for crawl_result in crawler.crawl_all_streaming(domains):
-                page_count += 1
-                try:
-                    print(f"🔄 [{page_count}] Processing: {crawl_result['url']}")
-                    await self._process_single_page(crawl_result, output_formats)
-                    results['processed_pages'].append(crawl_result['url'])
-                    print(f"✅ [{page_count}] Completed: {crawl_result['url']}")
-                except Exception as e:
-                    error_info = {
-                        'url': crawl_result['url'],
-                        'error': str(e)
-                    }
-                    results['errors'].append(error_info)
-                    print(f"❌ [{page_count}] Error processing {crawl_result['url']}: {e}")
+            try:
+                async for crawl_result in crawler.crawl_all_streaming(domains):
+                    page_count += 1
+                    try:
+                        print(f"🔄 [{page_count}] Processing: {crawl_result['url']}")
+                        await self._process_single_page(crawl_result, output_formats)
+                        results['processed_pages'].append(crawl_result['url'])
+                        print(f"✅ [{page_count}] Completed: {crawl_result['url']}")
+                    except Exception as e:
+                        error_info = {
+                            'url': crawl_result['url'],
+                            'error': str(e)
+                        }
+                        results['errors'].append(error_info)
+                        print(f"❌ [{page_count}] Error processing {crawl_result['url']}: {e}")
+            except Exception as e:
+                print(f"\n⚠️ Crawler stopped unexpectedly after {page_count} pages")
+                print(f"   Error: {str(e)[:200]}")
+                # Continue with cleanup even if crawler crashes
+            
+            # Save failed URLs if any
+            if hasattr(crawler, 'failed_urls') and crawler.failed_urls:
+                crawler.save_failed_urls()
+                results['failed_urls'] = len(crawler.failed_urls)
             
             if page_count == 0:
                 print("⚠️  No pages were successfully crawled")
@@ -156,12 +171,32 @@ class CrawlerOrchestrator:
         # Get final statistics
         results['stats'] = self.file_manager.get_output_stats()
         
+        # Clean up duplicate and blank files if enabled
+        cleanup_stats = self.file_manager.remove_duplicate_and_blank_files()
+        if cleanup_stats['duplicates_removed'] > 0 or cleanup_stats['blank_files_removed'] > 0:
+            results['cleanup_stats'] = cleanup_stats
+        
+        # Clean up checkpoint file on successful completion
+        self._cleanup_checkpoint()
+        
         print(f"\n🎉 Crawling completed!")
         print(f"✅ Successfully processed: {len(results['processed_pages'])} pages")
         if results['errors']:
-            print(f"❌ Errors encountered: {len(results['errors'])} pages")
+            print(f"❌ Processing errors: {len(results['errors'])} pages")
+        if results.get('failed_urls', 0) > 0:
+            print(f"🔄 Failed after retries: {results['failed_urls']} pages (saved to failed_urls.txt)")
         
         return results
+    
+    def _cleanup_checkpoint(self):
+        """Clean up checkpoint file after successful completion."""
+        import os
+        if os.path.exists('crawler_checkpoint.json'):
+            try:
+                os.remove('crawler_checkpoint.json')
+                print("   🗑️ Cleanup: Removed checkpoint file")
+            except Exception as e:
+                print(f"   ⚠️ Could not remove checkpoint file: {e}")
     
     def _display_startup_config(self, output_formats: List[str]) -> None:
         """Display configuration information before starting crawl."""
@@ -203,12 +238,18 @@ class CrawlerOrchestrator:
         
         # Markdown processing
         markdown_processing = self.config.get('markdown_processing', {})
-        sections_to_ignore = markdown_processing.get('sections_to_ignore', [])
-        if sections_to_ignore:
+        if markdown_processing:
             print(f"\n📝 Markdown processing:")
-            print(f"   🚫 Ignore sections: {len(sections_to_ignore)}")
-            for section in sections_to_ignore:
-                print(f"      - \"{section}\"")
+            sections_to_ignore = markdown_processing.get('sections_to_ignore', [])
+            if sections_to_ignore:
+                print(f"   🚫 Ignore sections: {len(sections_to_ignore)}")
+                for section in sections_to_ignore[:3]:  # Show first 3 sections
+                    print(f"      - \"{section}\"")
+                if len(sections_to_ignore) > 3:
+                    print(f"      ... and {len(sections_to_ignore) - 3} more")
+            print(f"   🔄 Remove duplicate lines: {markdown_processing.get('remove_duplicate_lines', False)}")
+            print(f"   📑 Remove duplicate files: {markdown_processing.get('remove_duplicate_files', False)}")
+            print(f"   📄 Remove blank files: {markdown_processing.get('remove_blank_files', False)}")
         
         print("=" * 60)
     
@@ -223,6 +264,48 @@ class CrawlerOrchestrator:
         url = crawl_result['url']
         html_content = crawl_result['html']
         domain_config = crawl_result['domain_config']
+        
+        # Check if this was a PDF redirect
+        if 'pdf_redirect' in crawl_result:
+            pdf_url = crawl_result['pdf_redirect']
+            print(f"   📥 Page redirected to PDF: {pdf_url}")
+            
+            # Process the PDF if enabled
+            if self.config.get('link_processing', {}).get('process_pdf_links', False):
+                try:
+                    print(f"   📥 Downloading and processing PDF...")
+                    # Download and process the PDF - pass list of formats
+                    pdf_formats = [fmt for fmt in output_formats if fmt.lower() in ['markdown', 'md']]
+                    if pdf_formats:
+                        pdf_result = self.pdf_processor.process_pdf_url(pdf_url, pdf_formats)
+                        if pdf_result['success']:
+                            for format, content in pdf_result['content'].items():
+                                # Save with original URL as reference
+                                self.file_manager.save_pdf_content(
+                                    pdf_url,
+                                    pdf_result['filename'],
+                                    content,
+                                    format
+                                )
+                            print(f"   ✅ PDF processed and saved to crawled_pdf/")
+                            # Successfully processed PDF, no need for placeholder
+                            return
+                        else:
+                            print(f"   ⚠️ No content extracted from PDF")
+                            # Save placeholder only if PDF extraction failed
+                            placeholder_content = f"# Source: {url}\n\n---\n\n[PDF Document could not be extracted: {pdf_url}]({pdf_url})"
+                            self.file_manager.save_markdown(url, placeholder_content)
+                except Exception as e:
+                    print(f"   ❌ Error processing PDF: {e}")
+                    # Save placeholder on error
+                    placeholder_content = f"# Source: {url}\n\n---\n\n[PDF Document (error during extraction): {pdf_url}]({pdf_url})"
+                    self.file_manager.save_markdown(url, placeholder_content)
+            else:
+                print(f"   ⚠️ PDF processing is disabled in config")
+                # Save placeholder when PDF processing is disabled
+                placeholder_content = f"# Source: {url}\n\n---\n\n[PDF Document (processing disabled): {pdf_url}]({pdf_url})"
+                self.file_manager.save_markdown(url, placeholder_content)
+            return
         
         # Process HTML for document conversion (this includes domain-specific cleaning)
         processed_result = self.html_processor.process_html(

@@ -79,6 +79,12 @@ Examples:
     )
     
     parser.add_argument(
+        '--resume',
+        action='store_true',
+        help='Resume crawling from checkpoint if available'
+    )
+    
+    parser.add_argument(
         '--verbose',
         '-v',
         action='store_true',

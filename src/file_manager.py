@@ -4,21 +4,24 @@ File management module for handling file operations.
 
 import os
 import shutil
+import hashlib
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Set
 
 
 class FileManager:
     """Handles file operations and directory management."""
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], markdown_processing_config: Dict[str, Any] = None):
         """
         Initialize the FileManager.
         
         Args:
             config: Configuration dictionary containing file management settings
+            markdown_processing_config: Configuration for markdown processing
         """
         self.config = config
+        self.markdown_processing_config = markdown_processing_config or {}
         self.html_output_dir = config.get('html_output_dir', 'crawled_html')
         self.pages_output_dir = config.get('pages_output_dir', 'crawled_pages')
         self.pdf_output_dir = config.get('pdf_output_dir', 'crawled_pdf')
@@ -315,18 +318,146 @@ class FileManager:
             'total_files': 0
         }
         
-        # Count HTML files
+        # Count HTML files (including in subdirectories if domain subfolders are used)
         if os.path.exists(self.html_output_dir):
-            html_files = [f for f in os.listdir(self.html_output_dir) if f.endswith('.html')]
-            stats['html_files'] = len(html_files)
+            for root, dirs, files in os.walk(self.html_output_dir):
+                for file in files:
+                    if file.endswith('.html'):
+                        stats['html_files'] += 1
         
-        # Count other files
+        # Count other files (including in subdirectories if domain subfolders are used)
         if os.path.exists(self.pages_output_dir):
-            for filename in os.listdir(self.pages_output_dir):
-                if filename.endswith('.md'):
-                    stats['markdown_files'] += 1
-                elif filename.endswith('.docx'):
-                    stats['docx_files'] += 1
+            for root, dirs, files in os.walk(self.pages_output_dir):
+                for file in files:
+                    if file.endswith('.md'):
+                        stats['markdown_files'] += 1
+                    elif file.endswith('.docx'):
+                        stats['docx_files'] += 1
         
         stats['total_files'] = stats['html_files'] + stats['markdown_files'] + stats['docx_files']
+        return stats
+    
+    def _get_file_content_hash(self, file_path: str) -> str:
+        """
+        Get hash of file content excluding the first line (Source: line).
+        
+        Args:
+            file_path: Path to the file
+            
+        Returns:
+            Hash of the file content
+        """
+        with open(file_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            
+        # Skip the first line if it's a Source: line
+        if lines and lines[0].startswith('# Source:'):
+            content_to_hash = ''.join(lines[1:])
+        else:
+            content_to_hash = ''.join(lines)
+        
+        # Generate hash of the content
+        return hashlib.md5(content_to_hash.encode('utf-8')).hexdigest()
+    
+    def _is_blank_file(self, file_path: str) -> bool:
+        """
+        Check if a markdown file is blank (only contains Source: line).
+        
+        Args:
+            file_path: Path to the file
+            
+        Returns:
+            True if file is blank, False otherwise
+        """
+        with open(file_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        
+        if not lines:
+            return True
+            
+        # If first line is Source: line
+        if lines[0].startswith('# Source:'):
+            # Check if rest of file is empty or only whitespace
+            remaining_content = ''.join(lines[1:]).strip()
+            return len(remaining_content) == 0
+        
+        # Check if entire file is empty or only whitespace
+        return len(''.join(lines).strip()) == 0
+    
+    def remove_duplicate_and_blank_files(self, directory: str = None) -> Dict[str, int]:
+        """
+        Remove duplicate and blank markdown files from the output directory.
+        
+        Args:
+            directory: Directory to process (defaults to pages_output_dir)
+            
+        Returns:
+            Dictionary with statistics about removed files
+        """
+        if directory is None:
+            directory = self.pages_output_dir
+        
+        if not os.path.exists(directory):
+            return {'duplicates_removed': 0, 'blank_files_removed': 0}
+        
+        stats = {'duplicates_removed': 0, 'blank_files_removed': 0}
+        
+        # Check if features are enabled
+        remove_duplicate_files = self.markdown_processing_config.get('remove_duplicate_files', False)
+        remove_blank_files = self.markdown_processing_config.get('remove_blank_files', False)
+        
+        if not remove_duplicate_files and not remove_blank_files:
+            return stats
+        
+        # Get all markdown files
+        markdown_files = []
+        for root, dirs, files in os.walk(directory):
+            for file in files:
+                if file.endswith('.md'):
+                    markdown_files.append(os.path.join(root, file))
+        
+        # Remove blank files first
+        if remove_blank_files:
+            files_to_remove = []
+            for file_path in markdown_files:
+                if self._is_blank_file(file_path):
+                    files_to_remove.append(file_path)
+            
+            for file_path in files_to_remove:
+                try:
+                    os.remove(file_path)
+                    print(f"Removed blank file: {file_path}")
+                    stats['blank_files_removed'] += 1
+                    markdown_files.remove(file_path)
+                except Exception as e:
+                    print(f"Error removing blank file {file_path}: {e}")
+        
+        # Remove duplicate files
+        if remove_duplicate_files:
+            seen_hashes = {}
+            files_to_remove = []
+            
+            for file_path in markdown_files:
+                try:
+                    file_hash = self._get_file_content_hash(file_path)
+                    
+                    if file_hash in seen_hashes:
+                        # This is a duplicate
+                        files_to_remove.append(file_path)
+                    else:
+                        seen_hashes[file_hash] = file_path
+                except Exception as e:
+                    print(f"Error processing file {file_path}: {e}")
+            
+            for file_path in files_to_remove:
+                try:
+                    os.remove(file_path)
+                    print(f"Removed duplicate file: {file_path}")
+                    stats['duplicates_removed'] += 1
+                except Exception as e:
+                    print(f"Error removing duplicate file {file_path}: {e}")
+        
+        if stats['duplicates_removed'] > 0 or stats['blank_files_removed'] > 0:
+            print(f"\nCleanup complete: Removed {stats['duplicates_removed']} duplicate files and {stats['blank_files_removed']} blank files")
+        
         return stats

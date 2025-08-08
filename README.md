@@ -36,7 +36,31 @@ pip install -r requirements.txt
 crawl4ai-setup
 ```
 
+4. Install Playwright browsers (required for Crawl4AI):
+```bash
+python -m playwright install
+```
+
+**Note**: If you encounter an error like "Executable doesn't exist at ms-playwright/chromium", run the Playwright install command above to download the necessary browser binaries.
+
 ### Basic Usage
+
+**Recommended**: Use the crash-resistant wrapper:
+```bash
+# Windows
+crawl.bat
+
+# Or directly
+python crawler_wrapper.py
+
+# With options
+python crawler_wrapper.py --domain myt.mu --formats markdown
+```
+
+**Alternative**: Direct crawler (may crash on problematic pages):
+```bash
+python main_new.py
+```
 
 1. Configure domains in `config.yaml`:
 ```yaml
@@ -247,6 +271,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 2. **JavaScript not working**: Verify wait conditions and delays
 3. **File permission errors**: Run with appropriate permissions on Windows
 4. **Memory issues**: Reduce max_pages or enable streaming processing
+5. **Playwright browser not found**: Run `python -m playwright install` to download browser binaries
 
 ### Debug Options
 

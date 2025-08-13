@@ -73,8 +73,6 @@ class PDFProcessor:
             Path to temporary file or None if download failed
         """
         try:
-            print(f"📥 Downloading PDF: {url}")
-            
             # Download PDF
             response = requests.get(url, timeout=30, stream=True)
             response.raise_for_status()
@@ -90,7 +88,6 @@ class PDFProcessor:
                     if chunk:
                         temp_file.write(chunk)
             
-            print(f"   ✅ Downloaded PDF to: {temp_path}")
             return temp_path
             
         except requests.RequestException as e:
@@ -112,8 +109,6 @@ class PDFProcessor:
             Extracted content or None if extraction failed
         """
         try:
-            print(f"   📄 Extracting content from PDF...")
-            
             # Try to convert PDF using Docling
             conv_result = self.converter.convert(pdf_path)
             
@@ -143,7 +138,6 @@ class PDFProcessor:
                 print(f"   ⚠️  Unsupported output format: {output_format}")
                 return None
             
-            print(f"   ✅ Successfully extracted PDF content")
             return content
             
         except PermissionError as e:

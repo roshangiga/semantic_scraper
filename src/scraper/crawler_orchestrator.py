@@ -4,6 +4,9 @@ Crawler orchestrator module for coordinating all crawling operations.
 
 import asyncio
 import yaml
+import os
+import sys
+from datetime import datetime
 from typing import Dict, List, Any
 from pathlib import Path
 
@@ -12,6 +15,13 @@ from .html_processor import HTMLProcessor
 from .document_converter import DocumentConverter
 from .file_manager import FileManager
 from .pdf_processor import PDFProcessor
+from .report_generator import CrawlReportGenerator
+
+
+def print_immediate(*args, **kwargs):
+    """Print with immediate flush to ensure real-time output."""
+    print(*args, **kwargs)
+    sys.stdout.flush()
 
 
 class CrawlerOrchestrator:
@@ -43,6 +53,18 @@ class CrawlerOrchestrator:
             self.config.get('markdown_processing', {}),
             self.config.get('crawler', {}).get('docling', {})
         )
+        
+        # Initialize semantic processor for separate process handling
+        self.semantic_processor = None
+        self._init_semantic_processor()
+        self.semantic_queue_count = 0
+        
+        # Initialize report generator
+        self.report_generator = CrawlReportGenerator(
+            self.config.get('crawler', {}).get('file_manager', {}).get('report_output_dir', 'crawled_report')
+        )
+        
+        # Initialize progress formatter
         
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """
@@ -82,6 +104,43 @@ class CrawlerOrchestrator:
         """
         return self.config.get('crawler', {}).get('output_formats', ['html', 'markdown'])
     
+    def _init_semantic_processor(self):
+        """Initialize semantic processor for sequential processing."""
+        chunking_config = self.config.get('contextual_chunking', {})
+        if chunking_config.get('enabled', False):
+            try:
+                from ..semantic.sequential_processor import SequentialSemanticProcessor
+                
+                provider = chunking_config.get('provider', 'gemini').lower()
+                self.semantic_processor = SequentialSemanticProcessor(self.config)
+                
+                # Get the actual model name being used  
+                if provider == 'openai':
+                    model_name = chunking_config.get('openai_model', 'gpt-4o-mini')
+                    status_msg = f"Initialized semantic processor ({provider.upper()}: {model_name})"
+                else:
+                    model_name = chunking_config.get('gemini_model', 'gemini-2.5-flash')
+                    status_msg = f"Initialized semantic processor ({provider.capitalize()}: {model_name})"
+                
+                print(f"🧠 {status_msg}")  # This runs before progress formatter is created
+                
+            except ImportError as e:
+                provider = chunking_config.get('provider', 'gemini').lower()
+                if provider == 'openai':
+                    print(f"⚠️  Failed to import semantic processor: {e}")
+                    print("    Install openai: pip install openai")
+                else:
+                    print(f"⚠️  Failed to import semantic processor: {e}")
+                    print("    Install google-generativeai: pip install google-generativeai")
+            except Exception as e:
+                print(f"⚠️  Failed to initialize semantic processor: {e}")
+                self.semantic_processor = None
+    
+    def is_contextual_chunking_enabled(self) -> bool:
+        """Check if contextual chunking is enabled and available."""
+        return (self.semantic_processor is not None and 
+                self.config.get('contextual_chunking', {}).get('enabled', False))
+    
     def get_crawl4ai_config(self) -> Dict[str, Any]:
         """
         Get Crawl4AI configuration.
@@ -103,6 +162,9 @@ class CrawlerOrchestrator:
         """
         if output_formats is None:
             output_formats = self.get_output_formats()
+        
+        # Record start time
+        start_time = datetime.now()
         
         # Display configuration before starting
         self._display_startup_config(output_formats)
@@ -127,7 +189,17 @@ class CrawlerOrchestrator:
         
         results = {'processed_pages': [], 'errors': [], 'stats': {}}
         
-        print(f"\n🚀 Starting crawl process...")
+        # Initialize progress formatter
+        max_pages = crawl_config.get('max_pages', 100)
+        
+        # Set progress formatter for file manager
+        
+        # Get domain names for display
+        domain_names = [d['domain'] for d in domains]
+        print(f"🚀 Starting crawl of {len(domain_names)} domains with max {max_pages} pages total")
+        
+        # After the progress bar is initialized, route messages via formatter to
+        # ensure they render above the bar (avoid inline wrapping issues)
         print(f"📊 Max pages per domain: {crawl_config.get('max_pages', 100)}")
         print(f"⏱️  Delay before HTML capture: {crawl_config.get('delay_before_return_html', 2.5)}s")
         print(f"🔄 Bypass cache: {crawl_config.get('bypass_cache', True)}")
@@ -136,24 +208,40 @@ class CrawlerOrchestrator:
         print(f"⏰ Retry delay: {crawl_config.get('retry_delay', 5)}s")
         print("-" * 60)
         
-        async with WebCrawler(crawl_config) as crawler:
+        async with WebCrawler(crawl_config, None) as crawler:
             # Process pages as they are crawled (streaming approach)
             page_count = 0
             try:
                 async for crawl_result in crawler.crawl_all_streaming(domains):
                     page_count += 1
                     try:
-                        print(f"🔄 [{page_count}] Processing: {crawl_result['url']}")
+                        # Start page processing with enhanced progress info
+                        current_domain = crawl_result.get('domain_config', {}).get('domain', 'unknown')
+                        queue_size = crawl_result.get('queue_size', 0)
+                        print_immediate(f"\n┌─ 🗺️  Processing Page {page_count} of ∞")
+                        print_immediate(f"│  ┌─ 📊 Queue Status: {queue_size} URLs remaining")
+                        print_immediate(f"│  ├─ 🌐 Domain: {current_domain}")
+                        print_immediate(f"│  └─ 📍 URL: {crawl_result['url']}")
+                        print_immediate(f"│")
+                        
                         await self._process_single_page(crawl_result, output_formats)
                         results['processed_pages'].append(crawl_result['url'])
-                        print(f"✅ [{page_count}] Completed: {crawl_result['url']}")
+                        
+                        # Check if it was a PDF redirect
+                        is_pdf = 'pdf_redirect' in crawl_result
+                        # Check for completed semantic tasks and display them
+                        self._display_semantic_results()
+                        
+                        print_immediate(f"│  └─ ✅ Page {page_count} complete")
+                        print_immediate(f"└─ {'═' * 50}")  # Enhanced separator between pages
                     except Exception as e:
                         error_info = {
                             'url': crawl_result['url'],
                             'error': str(e)
                         }
                         results['errors'].append(error_info)
-                        print(f"❌ [{page_count}] Error processing {crawl_result['url']}: {e}")
+                        print_immediate(f"│  └─ ❌ Error: {str(e)[:80]}...")
+                        print_immediate(f"└─ {'═' * 50}")
             except Exception as e:
                 print(f"\n⚠️ Crawler stopped unexpectedly after {page_count} pages")
                 print(f"   Error: {str(e)[:200]}")
@@ -176,15 +264,37 @@ class CrawlerOrchestrator:
         if cleanup_stats['duplicates_removed'] > 0 or cleanup_stats['blank_files_removed'] > 0:
             results['cleanup_stats'] = cleanup_stats
         
+        # Wait for all semantic chunking tasks to complete and stop worker
+        if self.is_contextual_chunking_enabled():
+            print("   🔄 Finalizing semantic chunking...")
+            self.semantic_processor.wait_and_stop()
+        
+        # Record end time
+        end_time = datetime.now()
+        
+        # Generate comprehensive report
+        try:
+            report_file = self.report_generator.generate_report(
+                results, self.config, start_time, end_time
+            )
+            print(f"\n📊 Comprehensive report generated: {report_file}")
+        except Exception as e:
+            print(f"\n⚠️ Failed to generate report: {e}")
+        
         # Clean up checkpoint file on successful completion
         self._cleanup_checkpoint()
         
+        # Show final summary using progress formatter
+        # Show final summary
         print(f"\n🎉 Crawling completed!")
         print(f"✅ Successfully processed: {len(results['processed_pages'])} pages")
         if results['errors']:
             print(f"❌ Processing errors: {len(results['errors'])} pages")
         if results.get('failed_urls', 0) > 0:
             print(f"🔄 Failed after retries: {results['failed_urls']} pages (saved to failed_urls.txt)")
+            
+            duration = end_time - start_time
+            print(f"⏱️ Total time: {duration}")
         
         return results
     
@@ -198,6 +308,31 @@ class CrawlerOrchestrator:
             except Exception as e:
                 print(f"   ⚠️ Could not remove checkpoint file: {e}")
     
+    def _display_semantic_results(self):
+        """Check for and display completed semantic chunking results."""
+        if not self.semantic_processor:
+            return
+            
+        # Check for newly completed tasks
+        for task in self.semantic_processor.completed_tasks:
+            if hasattr(task, 'success_info') and not hasattr(task, 'displayed'):
+                info = task.success_info
+                print_immediate(f"│  ├─ ✅ Semantic chunking completed")
+                if info['stdout']:
+                    print_immediate(f"│  │  {info['stdout']}")
+                print_immediate(f"│  └─ 📊 Progress: {info['completed']}/{info['total']} files processed")
+                task.displayed = True  # Mark as displayed
+        
+        # Check for newly failed tasks
+        for task in self.semantic_processor.failed_tasks:
+            if hasattr(task, 'error_info') and not hasattr(task, 'displayed'):
+                info = task.error_info
+                print_immediate(f"│  ├─ ❌ Semantic chunking failed")
+                if info['stderr']:
+                    error_msg = info['stderr'][:100] + "..." if len(info['stderr']) > 100 else info['stderr']
+                    print_immediate(f"│  └─ ⚠️  Error: {error_msg}")
+                task.displayed = True  # Mark as displayed
+    
     def _display_startup_config(self, output_formats: List[str]) -> None:
         """Display configuration information before starting crawl."""
         print("\n" + "=" * 60)
@@ -210,7 +345,7 @@ class CrawlerOrchestrator:
         # File settings
         file_config = self.config.get('crawler', {}).get('file_manager', {})
         print(f"📁 HTML directory: {file_config.get('html_output_dir', 'crawled_html')}")
-        print(f"📁 Pages directory: {file_config.get('pages_output_dir', 'crawled_pages')}")
+        print(f"📁 Pages directory: {file_config.get('pages_output_dir', 'crawled_docling')}")
         print(f"📂 Use domain subfolders: {file_config.get('use_domain_subfolders', True)}")
         print(f"🗑️  Delete existing folders: {file_config.get('delete_existing_folders', False)}")
         
@@ -247,7 +382,7 @@ class CrawlerOrchestrator:
                     print(f"      - \"{section}\"")
                 if len(sections_to_ignore) > 3:
                     print(f"      ... and {len(sections_to_ignore) - 3} more")
-            print(f"   🔄 Remove duplicate lines: {markdown_processing.get('remove_duplicate_lines', False)}")
+            print(f"   🔄 Remove duplicate lines: True (always enabled)")
             print(f"   📑 Remove duplicate files: {markdown_processing.get('remove_duplicate_files', False)}")
             print(f"   📄 Remove blank files: {markdown_processing.get('remove_blank_files', False)}")
         
@@ -268,7 +403,7 @@ class CrawlerOrchestrator:
         # Check if this was a PDF redirect
         if 'pdf_redirect' in crawl_result:
             pdf_url = crawl_result['pdf_redirect']
-            print(f"   📥 Page redirected to PDF: {pdf_url}")
+            print_immediate(f"│  ├─ 📥 Redirected to PDF document")
             
             # Process the PDF if enabled
             if self.config.get('link_processing', {}).get('process_pdf_links', False):
@@ -281,13 +416,23 @@ class CrawlerOrchestrator:
                         if pdf_result['success']:
                             for format, content in pdf_result['content'].items():
                                 # Save with original URL as reference
-                                self.file_manager.save_pdf_content(
+                                saved_path = self.file_manager.save_pdf_content(
                                     pdf_url,
                                     pdf_result['filename'],
                                     content,
                                     format
                                 )
-                            print(f"   ✅ PDF processed and saved to crawled_pdf/")
+                                
+                                # Start semantic chunking for PDF markdown content
+                                if (self.is_contextual_chunking_enabled() and 
+                                    format.lower() in ['markdown', 'md']):
+                                    try:
+                                        semantic_output_path = self.semantic_processor.get_semantic_output_path(saved_path)
+                                        self.semantic_processor.add_task(saved_path, semantic_output_path, pdf_url)
+                                    except Exception as e:
+                                        print(f"   ⚠️ Error launching semantic chunking for PDF {pdf_url}: {e}")
+                                        
+                            print_immediate(f"│  ├─ ✅ PDF processed successfully")
                             # Successfully processed PDF, no need for placeholder
                             return
                         else:
@@ -335,7 +480,20 @@ class CrawlerOrchestrator:
                 )
                 
                 # Save converted content
-                self.file_manager.save_content(url, converted_content, output_format)
+                saved_path = self.file_manager.save_content(url, converted_content, output_format)
+                
+                # Start semantic chunking in separate process if enabled and format is markdown
+                if (self.is_contextual_chunking_enabled() and 
+                    output_format.lower() in ['markdown', 'md']):
+                    try:
+                        semantic_output_path = self.semantic_processor.get_semantic_output_path(saved_path)
+                        self.semantic_processor.add_task(saved_path, semantic_output_path, url)
+                        # Increment queue counter and show status
+                        self.semantic_queue_count += 1
+                        filename = Path(saved_path).name
+                        print_immediate(f"│  ├─ 🧠 Queued for semantic processing (Queue: {self.semantic_queue_count})")
+                    except Exception as e:
+                        print_immediate(f"   ❌ Semantic chunking error for {url}: {e}")
         
         # Process PDF URLs if any were found
         if 'pdf_urls' in crawl_result and crawl_result['pdf_urls']:
@@ -357,12 +515,21 @@ class CrawlerOrchestrator:
                 if result['success']:
                     # Save content for each format
                     for format_name, content in result['content'].items():
-                        self.file_manager.save_pdf_content(
+                        saved_path = self.file_manager.save_pdf_content(
                             pdf_url, 
                             result['filename'], 
                             content, 
                             format_name
                         )
+                        
+                        # Start semantic chunking for PDF markdown content
+                        if (self.is_contextual_chunking_enabled() and 
+                            format_name.lower() in ['markdown', 'md']):
+                            try:
+                                semantic_output_path = self.semantic_processor.get_semantic_output_path(saved_path)
+                                self.semantic_processor.add_task(saved_path, semantic_output_path, pdf_url)
+                            except Exception as e:
+                                print(f"   ⚠️ Error launching semantic chunking for PDF {pdf_url}: {e}")
                 else:
                     print(f"   ❌ Failed to process PDF: {pdf_url}")
                     
@@ -447,8 +614,17 @@ class CrawlerOrchestrator:
         # File settings
         file_config = self.config.get('crawler', {}).get('file_manager', {})
         print(f"HTML output directory: {file_config.get('html_output_dir', 'crawled_html')}")
-        print(f"Pages output directory: {file_config.get('pages_output_dir', 'crawled_pages')}")
+        print(f"Pages output directory: {file_config.get('pages_output_dir', 'crawled_docling')}")
+        print(f"Report output directory: {file_config.get('report_output_dir', 'crawled_report')}")
         print(f"Delete existing folders: {file_config.get('delete_existing_folders', False)}")
+        
+        # Contextual chunking
+        chunking_config = self.config.get('contextual_chunking', {})
+        is_enabled = chunking_config.get('enabled', False)
+        print(f"Contextual chunking: {'Enabled' if is_enabled else 'Disabled'}")
+        if is_enabled:
+            print(f"  Model: {chunking_config.get('gemini_model', 'gemini-1.5-pro')}")
+            print(f"  Semantic output directory: {file_config.get('semantic_output_dir', 'crawled_semantic')}")
         
         # Validation
         errors = self.validate_config()

@@ -5,6 +5,7 @@ File management module for handling file operations.
 import os
 import shutil
 import hashlib
+import sys
 from pathlib import Path
 from typing import Dict, Any, List, Set
 
@@ -23,23 +24,30 @@ class FileManager:
         self.config = config
         self.markdown_processing_config = markdown_processing_config or {}
         self.html_output_dir = config.get('html_output_dir', 'crawled_html')
-        self.pages_output_dir = config.get('pages_output_dir', 'crawled_pages')
+        self.pages_output_dir = config.get('pages_output_dir', 'crawled_docling')
         self.pdf_output_dir = config.get('pdf_output_dir', 'crawled_pdf')
+        self.semantic_output_dir = config.get('semantic_output_dir', 'crawled_semantic')
+        self.report_output_dir = config.get('report_output_dir', 'crawled_report')
         self.filename_template = config.get('filename_template', '{sanitized_url}')
         self.delete_existing_folders = config.get('delete_existing_folders', False)
         self.use_domain_subfolders = config.get('use_domain_subfolders', True)
     
+    def _log(self, msg: str) -> None:
+        """Log via progress formatter if available, else print.
+        """
+        print(msg)
+    
     def setup_directories(self) -> None:
         """Set up output directories."""
-        directories = [self.html_output_dir, self.pages_output_dir, self.pdf_output_dir]
+        directories = [self.html_output_dir, self.pages_output_dir, self.pdf_output_dir, self.semantic_output_dir, self.report_output_dir]
         
         for directory in directories:
             if self.delete_existing_folders and os.path.exists(directory):
-                print(f"Deleting existing directory: {directory}")
+                self._log(f"Deleting existing directory: {directory}")
                 self._delete_directory_with_retry(directory)
             
             os.makedirs(directory, exist_ok=True)
-            print(f"Created directory: {directory}")
+            self._log(f"Created directory: {directory}")
     
     def _delete_directory_with_retry(self, directory: str, max_retries: int = 3) -> None:
         """
@@ -68,16 +76,16 @@ class FileManager:
                 
             except PermissionError as e:
                 if attempt < max_retries - 1:
-                    print(f"Attempt {attempt + 1} failed, retrying in 1 second...")
+                    self._log(f"Attempt {attempt + 1} failed, retrying in 1 second...")
                     time.sleep(1)
                 else:
-                    print(f"Warning: Could not delete {directory} after {max_retries} attempts.")
-                    print(f"Error: {e}")
-                    print("Please close any programs using files in this directory and try again.")
+                    self._log(f"Warning: Could not delete {directory} after {max_retries} attempts.")
+                    self._log(f"Error: {e}")
+                    self._log("Please close any programs using files in this directory and try again.")
                     # Don't raise the error, just continue
                     return
             except Exception as e:
-                print(f"Unexpected error deleting {directory}: {e}")
+                self._log(f"Unexpected error deleting {directory}: {e}")
                 return
     
     def generate_filename(self, url: str, file_extension: str) -> str:
@@ -185,7 +193,12 @@ class FileManager:
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(content)
         
-        print(f"Saved HTML: {file_path}")
+        # Verify file was saved successfully
+        if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+            print(f"│  ├─ ✔️ Saved HTML")
+        else:
+            print(f"│  ├─ ❌ Failed to save HTML")
+        sys.stdout.flush()
         return file_path
     
     def save_markdown(self, url: str, content: str) -> str:
@@ -205,7 +218,12 @@ class FileManager:
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(content)
         
-        print(f"Saved Markdown: {file_path}")
+        # Verify file was saved successfully
+        if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+            print(f"│  ├─ ✔️ Saved Markdown")
+        else:
+            print(f"│  ├─ ❌ Failed to save Markdown")
+        sys.stdout.flush()
         return file_path
     
     def save_docx(self, url: str, content: bytes) -> str:
@@ -225,8 +243,41 @@ class FileManager:
         with open(file_path, 'wb') as f:
             f.write(content)
         
-        print(f"Saved DOCX: {file_path}")
+        self._log(f"Saved DOCX: {file_path}")
         return file_path
+    
+    def save_semantic_chunks(self, url: str, content: str) -> str:
+        """
+        Save semantic chunks content to file.
+        
+        Args:
+            url: URL the content came from
+            content: Semantic chunks content to save
+            
+        Returns:
+            Path to saved file
+        """
+        filename = self.generate_filename(url, '.md')
+        file_path = self._get_output_path(self.semantic_output_dir, url, filename)
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        
+        self._log(f"💾 Saved semantic chunks: {file_path}")
+        return file_path
+    
+    def get_semantic_file_path(self, url: str) -> str:
+        """
+        Get the file path for semantic chunks without saving.
+        
+        Args:
+            url: URL to get path for
+            
+        Returns:
+            Path where semantic chunks would be saved
+        """
+        filename = self.generate_filename(url, '.md')
+        return self._get_output_path(self.semantic_output_dir, url, filename)
     
     def save_pdf_content(self, pdf_url: str, original_filename: str, content: str, output_format: str = 'markdown') -> str:
         """
@@ -254,7 +305,8 @@ class FileManager:
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(content)
         
-        print(f"Saved PDF content: {file_path}")
+        print(f"│  ├─ ✔️ Saved PDF content")
+        sys.stdout.flush()
         return file_path
     
     def save_processed_html(self, url: str, content: str) -> str:
@@ -274,7 +326,7 @@ class FileManager:
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(content)
         
-        print(f"Saved processed HTML: {file_path}")
+        self._log(f"Saved processed HTML: {file_path}")
         return file_path
     
     def save_content(self, url: str, content: Any, output_format: str) -> str:
@@ -315,6 +367,7 @@ class FileManager:
             'html_files': 0,
             'markdown_files': 0,
             'docx_files': 0,
+            'pdf_files': 0,
             'total_files': 0
         }
         
@@ -334,7 +387,14 @@ class FileManager:
                     elif file.endswith('.docx'):
                         stats['docx_files'] += 1
         
-        stats['total_files'] = stats['html_files'] + stats['markdown_files'] + stats['docx_files']
+        # Count PDF files  
+        if os.path.exists(self.pdf_output_dir):
+            for root, dirs, files in os.walk(self.pdf_output_dir):
+                for file in files:
+                    if file.endswith('.md'):  # PDF content converted to markdown
+                        stats['pdf_files'] += 1
+        
+        stats['total_files'] = stats['html_files'] + stats['markdown_files'] + stats['docx_files'] + stats['pdf_files']
         return stats
     
     def _get_file_content_hash(self, file_path: str) -> str:

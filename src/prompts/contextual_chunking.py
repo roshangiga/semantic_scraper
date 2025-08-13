@@ -10,8 +10,24 @@ class ContextualChunking:
         if document_content is not None:
             self.document_content = document_content
         else:
-            with open(document_path, 'r', encoding='utf-8') as f:
-                self.document_content = f.read()
+            # Try multiple encodings to handle various file formats
+            encodings = ['utf-8', 'iso-8859-1', 'windows-1252', 'cp1252']
+            content = None
+            
+            for encoding in encodings:
+                try:
+                    with open(document_path, 'r', encoding=encoding) as f:
+                        content = f.read()
+                    break
+                except UnicodeDecodeError:
+                    continue
+            
+            if content is None:
+                # If all encodings fail, use utf-8 with error replacement
+                with open(document_path, 'r', encoding='utf-8', errors='replace') as f:
+                    content = f.read()
+            
+            self.document_content = content
     
     def get_full_prompt(self):
         """
@@ -53,6 +69,9 @@ Mention if it is for Consumer only or Enterprise only, but no need to mention it
 3.5. If URL is devices.myt.mu, include the device or devices it is about in keywords.
 
 ---
+4. **Chunk size:** Do not make the chunks too small or too large. If the content is similar- e.g. list of store locations, do not split into smaller chunks.
+
+---
 
 Return your response strictly as below in JSON format but with no tags, no json tags, no ```, no explanations nor extra text.
 
@@ -68,7 +87,8 @@ Output format:
 {
 "content": "Chunk 2 of <total>\\n# Chunk Context:\\n{{CHUNK_CONTEXT}}\\n# Chunk Content:\\n{{CHUNK_CONTENT}}",
 "keywords": ["keyword1", "keyword2", "..."]
-}
+},
+...
 ]
 
 ---

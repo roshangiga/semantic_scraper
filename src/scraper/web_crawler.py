@@ -3,7 +3,9 @@ Web crawler module for handling Crawl4AI operations.
 """
 
 import asyncio
+import aiohttp
 import os
+import sys
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 from urllib.parse import urlparse, urljoin
@@ -22,23 +24,42 @@ from bs4 import BeautifulSoup
 class WebCrawler:
     """Handles web crawling operations using Crawl4AI."""
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], progress_formatter=None):
         """
         Initialize the WebCrawler.
         
         Args:
             config: Configuration dictionary containing crawl4ai settings
+            progress_formatter: Optional CLI progress formatter
         """
         self.config = config
         self.crawler = None
         self.visited_urls = set()
         self.queue = deque()
         self.failed_urls = []  # Track failed URLs with reasons
+        self.raw_html_cache = {}  # Cache for raw HTML to avoid re-fetching
+        self.progress_formatter = progress_formatter
         
     async def __aenter__(self):
         """Async context manager entry."""
+        # Suppress ALL Crawl4AI logging for clean progress bar
+        import logging
+        logging.getLogger('crawl4ai').setLevel(logging.ERROR)
+        logging.getLogger('httpx').setLevel(logging.WARNING)
+        logging.getLogger('httpcore').setLevel(logging.WARNING)
+        
+        # Import the config classes
+        from crawl4ai import BrowserConfig
+        
+        # Create browser config with verbose disabled
+        browser_config = BrowserConfig(
+            headless=True,
+            verbose=False  # Disable browser-level verbose logging
+        )
+        
         self.crawler = AsyncWebCrawler(
-            verbose=self.config.get('verbose', True)
+            config=browser_config,
+            verbose=False  # Disable crawler-level verbose logging
         )
         return self
     
@@ -105,6 +126,49 @@ class WebCrawler:
             'html_classes_to_only_include': [],
             'comment_blocks_to_remove': []
         }
+    
+    async def crawl_page_two_phase(self, url: str, domain_config: Dict[str, Any], allowed_domains: List[str], all_domains: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """
+        Two-phase crawling: fetch raw HTML for links, then use Crawl4AI for content.
+        
+        Args:
+            url: URL to crawl
+            domain_config: Domain-specific configuration  
+            allowed_domains: List of allowed domains for link extraction
+            all_domains: List of all domain configurations
+            
+        Returns:
+            Dictionary containing crawl results with extracted links
+        """
+        # Phase 1: Fetch raw HTML for link extraction
+        raw_html = await self.fetch_raw_html(url)
+        links = {'pages': [], 'pdfs': []}
+        
+        if raw_html:
+            # Extract links from raw HTML (before JavaScript processing)
+            links = self.extract_links(raw_html, url, allowed_domains, all_domains)
+            if self.progress_formatter:
+                self.progress_formatter.log_links_found(len(links['pages']), len(links['pdfs']))
+        
+        # Phase 2: Use Crawl4AI for content processing (with JavaScript cleaning)
+        crawl_result = await self.crawl_page(url, domain_config)
+        
+        if crawl_result:
+            # Add extracted links to the result
+            crawl_result['links'] = links
+            return crawl_result
+        else:
+            # If Crawl4AI failed but we got links, return basic result
+            if links['pages'] or links['pdfs']:
+                print(f"   🔗 Crawl4AI failed but extracted {len(links['pages'])} links from raw HTML")
+                return {
+                    'url': url,
+                    'html': raw_html or '',
+                    'domain_config': domain_config,
+                    'links': links,
+                    'crawl4ai_failed': True
+                }
+            return None
     
     async def crawl_page(self, url: str, domain_config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
@@ -203,6 +267,7 @@ class WebCrawler:
                     'wait_for': crawl_params.get('wait_for'),
                     'delay_before_return_html': crawl_params.get('delay_before_return_html'),
                     'page_timeout': crawl_params.get('page_timeout'),  # milliseconds
+                    'verbose': False  # CRITICAL: Disable verbose logging to suppress [FETCH]/[SCRAPE]/[COMPLETE]
                 }
                 # Cache mode mapping (default to BYPASS when bypass_cache True)
                 if CacheMode is not None:
@@ -212,19 +277,18 @@ class WebCrawler:
 
                 # js_only remains a top-level flag in some versions; pass through when set
                 js_only = bool(crawl_params.get('js_only')) if 'js_only' in crawl_params else None
-                if crawl_params.get('delay_before_return_html') is not None:
-                    try:
-                        dly = float(crawl_params['delay_before_return_html'])
-                        print(f"   ⏳ Applying delay_before_return_html={dly:.2f}s (run_config)")
-                    except Exception:
-                        pass
+                # Optional logs routed to progress formatter
                 if crawl_params.get('wait_for'):
                     wf = str(crawl_params['wait_for'])
-                    print(f"   ⏳ Applying wait_for='{wf[:60]}' (run_config)")
+                    if self.progress_formatter:
+                        self.progress_formatter._write("⏳ Applying wait_for…")
+                    # Suppress technical wait condition messages to avoid timing issues
                 if crawl_params.get('page_timeout') is not None:
                     try:
                         pt = int(crawl_params['page_timeout'])
-                        print(f"   ⏱️  Applying page_timeout={pt}ms (run_config)")
+                        if self.progress_formatter:
+                            self.progress_formatter._write(f"⏱️ page_timeout={pt}ms")
+                        # Suppress technical timeout messages to avoid timing issues
                     except Exception:
                         pass
                 # Your installed version exposes parameter name `config` for arun
@@ -237,18 +301,12 @@ class WebCrawler:
                 if crawl_params.get('delay_before_return_html') is not None:
                     try:
                         dly = float(crawl_params['delay_before_return_html'])
-                        print(f"   ⏳ Applying delay_before_return_html={dly:.2f}s (legacy)")
+                        # Delay logging suppressed for clean progress bar
                     except Exception:
                         pass
-                if crawl_params.get('wait_for'):
-                    wf = str(crawl_params['wait_for'])
-                    print(f"   ⏳ Applying wait_for='{wf[:60]}' (legacy)")
-                if crawl_params.get('page_timeout') is not None:
-                    try:
-                        pt = int(crawl_params['page_timeout'])
-                        print(f"   ⏱️  Applying page_timeout={pt}ms (legacy)")
-                    except Exception:
-                        pass
+                # Legacy parameter application - logging suppressed for clean progress bar
+                # Add verbose=False for legacy mode too
+                crawl_params['verbose'] = False
                 result = await self.crawler.arun(**crawl_params)
             
             # Check if we were redirected to a PDF by looking for our marker in the HTML
@@ -258,7 +316,7 @@ class WebCrawler:
                 pdf_match = re.search(r'PDF_REDIRECT:([^\s<]+)', result.cleaned_html)
                 if pdf_match:
                     final_url = pdf_match.group(1)
-                    print(f"   📄 Page redirected to PDF: {final_url}")
+                    # Suppressed redirect message to keep progress clean
                     return {
                         'url': url,
                         'html': result.cleaned_html,
@@ -273,7 +331,7 @@ class WebCrawler:
             
             # If the final URL is a PDF, add it to our PDF queue
             if final_url.lower().endswith('.pdf'):
-                print(f"   📄 Page redirected to PDF: {final_url}")
+                # Suppressed redirect message to keep progress clean
                 # Create a minimal HTML with the PDF link for processing
                 pdf_html = f'<html><body><a href="{final_url}">PDF Document: {final_url}</a></body></html>'
                 return {
@@ -303,6 +361,74 @@ class WebCrawler:
                 print(f"No valid content received from {url}")
             else:
                 print(f"Error crawling {url}: {e}")
+            return None
+    
+    async def fetch_raw_html(self, url: str, timeout: int = 30) -> Optional[str]:
+        """
+        Fetch raw HTML using aiohttp for link extraction (before JavaScript processing).
+        Uses caching to avoid re-fetching the same URL.
+        
+        Args:
+            url: URL to fetch
+            timeout: Request timeout in seconds
+            
+        Returns:
+            Raw HTML content or None if failed
+        """
+        # Check cache first
+        if url in self.raw_html_cache:
+            if self.progress_formatter:
+                self.progress_formatter.log_raw_html_fetch(url, cached=True)
+            return self.raw_html_cache[url]
+            
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout)) as session:
+                async with session.get(url, headers=headers) as response:
+                    if response.status == 200:
+                        try:
+                            # First try to read with response encoding
+                            content = await response.text()
+                        except UnicodeDecodeError:
+                            try:
+                                # Fallback to reading bytes and decoding with error handling
+                                raw_bytes = await response.read()
+                                # Try common encodings
+                                for encoding in ['utf-8', 'iso-8859-1', 'windows-1252']:
+                                    try:
+                                        content = raw_bytes.decode(encoding)
+                                        break
+                                    except UnicodeDecodeError:
+                                        continue
+                                else:
+                                    # If all encodings fail, use utf-8 with error replacement
+                                    content = raw_bytes.decode('utf-8', errors='replace')
+                            except Exception as e:
+                                print(f"   ❌ Failed to decode content from {url}: {e}")
+                                self.raw_html_cache[url] = None
+                                return None
+                        
+                        # Cache the result
+                        self.raw_html_cache[url] = content
+                        if self.progress_formatter:
+                            self.progress_formatter.log_raw_html_fetch(url, cached=False)
+                        return content
+                    else:
+                        print(f"   ❌ HTTP {response.status} fetching raw HTML: {url}")
+                        # Cache failed result as None to avoid retrying
+                        self.raw_html_cache[url] = None
+                        return None
+                        
+        except asyncio.TimeoutError:
+            print(f"   ⏰ Timeout fetching raw HTML: {url}")
+            self.raw_html_cache[url] = None  # Cache failure
+            return None
+        except Exception as e:
+            print(f"   ⚠️ Error fetching raw HTML from {url}: {e}")
+            self.raw_html_cache[url] = None  # Cache failure
             return None
     
     def extract_links(self, html: str, base_url: str, allowed_domains: List[str], all_domains: List[Dict[str, Any]]) -> Dict[str, List[str]]:
@@ -450,6 +576,7 @@ class WebCrawler:
                 with open('crawler_checkpoint.json', 'r', encoding='utf-8') as f:
                     checkpoint = json.load(f)
                 print(f"📥 Loaded checkpoint with {len(checkpoint['visited_urls'])} visited URLs")
+                sys.stdout.flush()
                 return set(checkpoint['visited_urls']), deque(checkpoint['crawl_queue'])
             except Exception as e:
                 print(f"⚠️ Could not load checkpoint: {e}")
@@ -510,54 +637,54 @@ class WebCrawler:
                 print(f"⚠️ Skipping problematic URL: {url}")
                 continue
             
-            print(f"🌐 Crawling: {url} ({pages_crawled + 1}/{max_pages})")
+            # Log crawling start through progress formatter
+            if self.progress_formatter:
+                self.progress_formatter.log_crawling_start(url)
             
             # Get domain config - use specific config if available, otherwise use default
             domain_config = self.get_domain_config(url, domains)
             if not domain_config:
                 domain_config = self.get_default_domain_config(url)
-                print(f"   📋 Using default configuration for domain: {domain_config['domain']}")
+                if self.progress_formatter:
+                    self.progress_formatter.log_domain_config(domain_config['domain'])
             else:
-                print(f"   ⚙️  Using configured settings for domain: {domain_config['domain']}")
-                if domain_config.get('js_code'):
-                    print(f"   ⚡ JavaScript code will be executed")
-                if domain_config.get('wait_for'):
-                    print(f"   ⏳ Waiting for condition: {domain_config['wait_for'][:30]}...")
+                if self.progress_formatter:
+                    has_js = bool(domain_config.get('js_code'))
+                    has_wait = bool(domain_config.get('wait_for'))
+                    self.progress_formatter.log_domain_config(domain_config['domain'], has_js, has_wait)
             
-            # Crawl the page
-            result = await self.crawl_page(url, domain_config)
+            # Crawl the page using two-phase approach (raw HTML for links, Crawl4AI for content)
+            result = await self.crawl_page_two_phase(url, domain_config, allowed_domains, domains)
             if result:
-                pages_crawled += 1
-                print(f"   ✅ Successfully crawled: {url}")
+                # Add queue size info for orchestrator
+                result['queue_size'] = len(self.queue)
+                result['pages_crawled'] = pages_crawled
                 
-                # Save checkpoint every N pages
+                # Only count HTML pages toward max_pages limit (not PDFs)
+                is_pdf_redirect = 'pdf_redirect' in result or result.get('crawl4ai_failed', False)
+                if not is_pdf_redirect:
+                    pages_crawled += 1
+                    # Progress logging handled by orchestrator
+                else:
+                    pass
+                
+                # Save checkpoint every N HTML pages
                 checkpoint_interval = self.config.get('save_checkpoint_every', 10)
-                if pages_crawled % checkpoint_interval == 0:
+                if pages_crawled > 0 and pages_crawled % checkpoint_interval == 0:
                     self.save_checkpoint(self.visited_urls, self.queue)
-                    print(f"   💾 Checkpoint saved after {pages_crawled} pages")
                 
-                # Extract and queue new URLs (only if we haven't reached the limit)
+                # Get links from the two-phase result (already extracted from raw HTML)
                 if pages_crawled < max_pages:
-                    links = self.extract_links(
-                        result['html'], 
-                        url, 
-                        allowed_domains,
-                        domains
-                    )
+                    links = result.get('links', {'pages': [], 'pdfs': []})
                     new_urls = links['pages']
                     pdf_urls = links['pdfs']
                     
-                    if new_urls:
-                        print(f"   🔗 Found {len(new_urls)} new URLs to crawl")
-                        for new_url in new_urls[:3]:  # Show first 3 URLs
-                            print(f"      - {new_url}")
-                        if len(new_urls) > 3:
-                            print(f"      ... and {len(new_urls) - 3} more")
+                    if new_urls and self.progress_formatter:
+                        self.progress_formatter.log_new_urls_discovered(new_urls)
                     
                     if pdf_urls:
-                        print(f"   📄 Found {len(pdf_urls)} PDF URLs")
-                        for pdf_url in pdf_urls[:3]:  # Show first 3 PDF URLs
-                            print(f"      - {pdf_url}")
+                        # PDF URLs will be handled by orchestrator, no need to print here
+                        pass
                         if len(pdf_urls) > 3:
                             print(f"      ... and {len(pdf_urls) - 3} more")
                     
@@ -575,7 +702,7 @@ class WebCrawler:
                 print(f"   ❌ Failed to crawl: {url}")
         
         if pages_crawled >= max_pages:
-            print(f"⚠️  Reached maximum page limit ({max_pages})")
+            print(f"⚠️  Reached maximum HTML page limit ({max_pages})")
 
     async def crawl_all(self, domains: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -608,48 +735,47 @@ class WebCrawler:
                 print(f"🚫 Excluding URL: {url}")
                 continue
             
-            print(f"🌐 Crawling: {url} ({pages_crawled + 1}/{max_pages})")
+            # Log crawling start through progress formatter
+            if self.progress_formatter:
+                self.progress_formatter.log_crawling_start(url)
             
             # Get domain config - use specific config if available, otherwise use default
             domain_config = self.get_domain_config(url, domains)
             if not domain_config:
                 domain_config = self.get_default_domain_config(url)
-                print(f"   📋 Using default configuration for domain: {domain_config['domain']}")
+                if self.progress_formatter:
+                    self.progress_formatter.log_domain_config(domain_config['domain'])
             else:
-                print(f"   ⚙️  Using configured settings for domain: {domain_config['domain']}")
-                if domain_config.get('js_code'):
-                    print(f"   ⚡ JavaScript code will be executed")
-                if domain_config.get('wait_for'):
-                    print(f"   ⏳ Waiting for condition: {domain_config['wait_for'][:30]}...")
+                if self.progress_formatter:
+                    has_js = bool(domain_config.get('js_code'))
+                    has_wait = bool(domain_config.get('wait_for'))
+                    self.progress_formatter.log_domain_config(domain_config['domain'], has_js, has_wait)
             
-            result = await self.crawl_page(url, domain_config)
+            # Use two-phase crawling
+            result = await self.crawl_page_two_phase(url, domain_config, allowed_domains, domains)
             if result:
                 results.append(result)
-                pages_crawled += 1
-                print(f"   ✅ Successfully crawled: {url}")
+                # Only count HTML pages toward max_pages limit (not PDFs)
+                is_pdf_redirect = 'pdf_redirect' in result or result.get('crawl4ai_failed', False)
+                if not is_pdf_redirect:
+                    pages_crawled += 1
+                    # Progress logging handled by orchestrator
+                else:
+                    print(f"   📄 Successfully processed PDF redirect: {url}")
+                    sys.stdout.flush()
                 
-                # Extract and queue new URLs (only if we haven't reached the limit)
+                # Get links from the two-phase result (already extracted)
                 if pages_crawled < max_pages:
-                    links = self.extract_links(
-                        result['html'], 
-                        url, 
-                        allowed_domains,
-                        domains
-                    )
+                    links = result.get('links', {'pages': [], 'pdfs': []})
                     new_urls = links['pages']
                     pdf_urls = links['pdfs']
                     
-                    if new_urls:
-                        print(f"   🔗 Found {len(new_urls)} new URLs to crawl")
-                        for new_url in new_urls[:3]:  # Show first 3 URLs
-                            print(f"      - {new_url}")
-                        if len(new_urls) > 3:
-                            print(f"      ... and {len(new_urls) - 3} more")
+                    if new_urls and self.progress_formatter:
+                        self.progress_formatter.log_new_urls_discovered(new_urls)
                     
                     if pdf_urls:
-                        print(f"   📄 Found {len(pdf_urls)} PDF URLs")
-                        for pdf_url in pdf_urls[:3]:  # Show first 3 PDF URLs
-                            print(f"      - {pdf_url}")
+                        # PDF URLs will be handled by orchestrator, no need to print here
+                        pass
                         if len(pdf_urls) > 3:
                             print(f"      ... and {len(pdf_urls) - 3} more")
                     
@@ -660,6 +786,6 @@ class WebCrawler:
                 print(f"   ❌ Failed to crawl: {url}")
         
         if pages_crawled >= max_pages:
-            print(f"Reached maximum page limit ({max_pages})")
+            print(f"⚠️  Reached maximum HTML page limit ({max_pages})")
         
         return results

@@ -7,7 +7,7 @@ crawler:
     delay_before_return_html: 2
     js_only: false
     wait_for: null
-    max_pages: 500  # Maximum number of pages to crawl per domain
+    max_pages: 5000  # Maximum number of pages to crawl per domain
     exclude_section_urls: true  # Skip URLs with # fragments (e.g., #tab-categories)
     follow_pdf_redirects: true  # Follow redirects to PDF files
     max_retries: 3  # Maximum number of retries for failed pages
@@ -30,8 +30,10 @@ crawler:
   file_manager:
     delete_existing_folders: true
     html_output_dir: "crawled_html"
-    pages_output_dir: "crawled_pages"
+    pages_output_dir: "crawled_docling"
     pdf_output_dir: "crawled_pdf"
+    semantic_output_dir: "crawled_semantic"  # Directory for contextual chunks
+    report_output_dir: "crawled_report"  # Directory for crawl reports
     filename_template: "{sanitized_url}"
     use_domain_subfolders: true  # Create subdirectories for each domain
 
@@ -76,8 +78,6 @@ html_cleaning:
 
 # Markdown post-processing settings
 markdown_processing:
-  remove_duplicate_sections: true  # Remove duplicate sections with identical content
-  remove_duplicate_lines: true  # Remove duplicate lines within each markdown file (excluding Source: line)
   remove_duplicate_files: true  # Remove duplicate files based on content (excluding Source: line)
   remove_blank_files: true  # Remove markdown files that only contain the Source: line
   sections_to_ignore:
@@ -92,6 +92,19 @@ markdown_processing:
     # Examples:updatte
     # - "Contact Us"
     # - "Related Articles"
+
+# Contextual chunking settings
+contextual_chunking:
+  enabled: true
+  provider: "gemini"  # openai | azure | gemini
+
+  # Models per provider
+  openai_model: "gpt-4o-mini"
+  gemini_model: "gemini-2.5-flash"
+
+  azure_endpoint: "https://scrapper-resource2025.cognitiveservices.azure.com/"
+  azure_api_version: "2024-12-01-preview"
+  azure_deployment: "gpt-5-mini"
 
 # Link processing settings
 link_processing:
@@ -130,9 +143,7 @@ domains:
         document.body.insertBefore(marker, document.body.firstChild);
       }
     html_elements_to_remove: [ ]
-    # Add domain-specific elements here if needed
     html_classes_to_remove: [ ]
-    # Add domain-specific classes here if needed
     html_classes_to_only_include:
       - ".mainhp"
     # Only include content from these classes if they exist, ignore if not found
@@ -178,3 +189,31 @@ domains:
     html_classes_to_only_include: [ ]
     exclude_urls: [ ]
 
+#  - domain: "www.myt.mu"
+#    start_urls:
+#      - "https://www.myt.mu/business/"
+#    js_code: |
+#      // Remove unwanted elements
+#      document.querySelectorAll('header, footer, nav, aside, .sidebar, .navbar, .header, .footer, style, script').forEach(el => el.remove());
+#
+#      // Detect if we're on a PDF page and add metadata
+#      if (window.location.href.includes('.pdf')) {
+#        const marker = document.createElement('div');
+#        marker.id = 'pdf-redirect-marker';
+#        marker.setAttribute('data-pdf-url', window.location.href);
+#        marker.textContent = 'PDF_REDIRECT:' + window.location.href;
+#        document.body.insertBefore(marker, document.body.firstChild);
+#      }
+#    html_elements_to_remove: [ ]
+#    html_classes_to_remove: [ ]
+#    html_classes_to_only_include:
+#      - ".mainhp"
+#    comment_blocks_to_remove: [ ]
+#    exclude_urls:  # Domain-specific URLs to exclude
+#      - "**/sinformer/avisdedeces/**"
+#      - "**/sinformer/foreignexchange**"
+#      - "**/sinformer/loterie/**"
+#      - "**/sinformer/loterie-vert/**"
+#      - "**/dstv/sports-guide**"
+#      - "**/new-world-sport-guide**"
+#      # Add more domain-specific URLs to exclude here

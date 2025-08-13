@@ -3,3 +3,7 @@ docling
 beautifulsoup4
 PyYAML
 requests
+aiohttp
+google-generativeai
+openai
+python-dotenv

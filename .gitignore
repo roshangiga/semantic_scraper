@@ -234,3 +234,4 @@ test_output/
 test_results/
 .coverage
 htmlcov/
+/crawled_docling/

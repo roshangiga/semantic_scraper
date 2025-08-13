@@ -54,13 +54,11 @@ class DocumentConverter:
         # Apply post-processing to remove excluded sections
         processed_content = self._post_process_markdown(markdown_content)
         
-        # Remove duplicate sections if enabled
-        if self.markdown_processing_config.get('remove_duplicate_sections', True):
-            processed_content = self._remove_duplicate_sections(processed_content)
+        # Remove duplicate sections (always enabled)
+        processed_content = self._remove_duplicate_sections(processed_content)
         
-        # Remove duplicate lines within the file if enabled
-        if self.markdown_processing_config.get('remove_duplicate_lines', False):
-            processed_content = self._remove_duplicate_lines(processed_content)
+        # Remove duplicate lines within the file (always enabled)
+        processed_content = self._remove_duplicate_lines(processed_content)
         
         return processed_content
     

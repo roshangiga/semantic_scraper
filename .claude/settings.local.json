@@ -5,7 +5,12 @@
       "Bash(dir:*)",
       "Bash(find:*)",
       "Bash(git restore:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(mkdir:*)",
+      "Bash(move src/gemini_client.py src/semantic/gemini_client.py)",
+      "Bash(mv:*)",
+      "Bash(dir:*)",
+      "Bash(move:*)"
     ],
     "deny": []
   }

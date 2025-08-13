@@ -9,6 +9,7 @@ import sys
 import os
 import warnings
 from pathlib import Path
+from dotenv import load_dotenv
 
 # Set UTF-8 encoding for Windows console
 if sys.platform == 'win32':
@@ -173,6 +174,7 @@ def print_results(results: dict, quiet: bool = False):
         print(f"  HTML files: {stats.get('html_files', 0)}")
         print(f"  Markdown files: {stats.get('markdown_files', 0)}")
         print(f"  DOCX files: {stats.get('docx_files', 0)}")
+        print(f"  PDF files: {stats.get('pdf_files', 0)}")
         print(f"  Total files: {stats.get('total_files', 0)}")
     
     print("=" * 24)
@@ -180,6 +182,9 @@ def print_results(results: dict, quiet: bool = False):
 
 async def main():
     """Main function."""
+    # Load environment variables from .env file
+    load_dotenv()
+    
     parser = create_argument_parser()
     args = parser.parse_args()
     

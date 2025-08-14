@@ -3,8 +3,31 @@ Document conversion module for handling Docling operations.
 """
 
 import os
+import logging
 from typing import Dict, Any, Optional
 from docling.document_converter import DocumentConverter as DoclingConverter
+
+# Suppress docling INFO messages using rich logging
+try:
+    from rich.logging import RichHandler
+    
+    # Configure logging to suppress docling info messages
+    docling_loggers = [
+        'docling',
+        'docling.pipeline.standard_pdf_pipeline', 
+        'docling.datamodel.pipeline_options',
+        'docling.pipeline.simple_pipeline',
+        'docling.backend.pypdfium2_backend',
+        'docling.pipeline'
+    ]
+    
+    for logger_name in docling_loggers:
+        logger = logging.getLogger(logger_name)
+        logger.setLevel(logging.ERROR)  # Only show errors
+        
+except ImportError:
+    # Fallback if rich not available
+    logging.getLogger('docling').setLevel(logging.ERROR)
 
 
 class DocumentConverter:
@@ -348,7 +371,7 @@ class DocumentConverter:
         except OSError as e:
             print(f"Warning: Could not delete temporary file {temp_file_path}: {e}")
     
-    def convert_with_cleanup(self, html_file_path: str, output_format: str, source_url: str = None) -> Any:
+    def convert_with_cleanup(self, html_file_path: str, output_format: str, source_url: str = None) -> tuple:
         """
         Convert document and clean up temporary file.
         
@@ -358,8 +381,11 @@ class DocumentConverter:
             source_url: Optional source URL to include in markdown header
             
         Returns:
-            Converted content in requested format
+            Tuple of (converted content, conversion_time_seconds)
         """
+        import time
+        start_time = time.time()
+        
         try:
             # Check if Docling is enabled
             if not self.config.get('enabled', True):
@@ -368,7 +394,8 @@ class DocumentConverter:
                 result = self._simple_html_to_text(html_file_path)
                 if output_format.lower() in ['markdown', 'md'] and source_url:
                     result = f"# Source: {source_url}\n\n---\n\n" + result
-                return result
+                conversion_time = time.time() - start_time
+                return result, conversion_time
             
             # Check file size - skip very large files that might cause crashes
             import os
@@ -380,7 +407,8 @@ class DocumentConverter:
                 result = self._simple_html_to_text(html_file_path)
                 if output_format.lower() in ['markdown', 'md'] and source_url:
                     result = f"# Source: {source_url}\n\n---\n\n" + result
-                return result
+                conversion_time = time.time() - start_time
+                return result, conversion_time
             
             try:
                 # Additional check for potentially problematic content patterns
@@ -389,7 +417,8 @@ class DocumentConverter:
                     result = self._simple_html_to_text(html_file_path)
                     if output_format.lower() in ['markdown', 'md'] and source_url:
                         result = f"# Source: {source_url}\n\n---\n\n" + result
-                    return result
+                    conversion_time = time.time() - start_time
+                    return result, conversion_time
                 
                 result = self.convert_document(html_file_path, output_format)
                 
@@ -398,7 +427,8 @@ class DocumentConverter:
                     url_header = f"# Source: {source_url}\n\n---\n\n"
                     result = url_header + result
                 
-                return result
+                conversion_time = time.time() - start_time
+                return result, conversion_time
             except Exception as e:
                 # If Docling fails, use fallback conversion
                 print(f"│  ├─ ⚠️ Docling conversion failed, using fallback: {str(e)[:100]}")
@@ -406,13 +436,15 @@ class DocumentConverter:
                     result = self._simple_html_to_text(html_file_path)
                     if output_format.lower() in ['markdown', 'md'] and source_url:
                         result = f"# Source: {source_url}\n\n---\n\n" + result
-                    return result
+                    conversion_time = time.time() - start_time
+                    return result, conversion_time
                 except Exception as fallback_error:
                     # Last resort - return error message
                     error_msg = f"[Conversion failed: {str(e)[:100]}]"
+                    conversion_time = time.time() - start_time
                     if output_format.lower() in ['markdown', 'md'] and source_url:
-                        return f"# Source: {source_url}\n\n---\n\n{error_msg}"
-                    return error_msg
+                        return f"# Source: {source_url}\n\n---\n\n{error_msg}", conversion_time
+                    return error_msg, conversion_time
                     
         finally:
             self.cleanup_temp_file(html_file_path)

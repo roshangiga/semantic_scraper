@@ -17,6 +17,26 @@ from .file_manager import FileManager
 from .pdf_processor import PDFProcessor
 from .report_generator import CrawlReportGenerator
 
+# Import rich console utilities
+try:
+    from ..console import (
+        console, print_success, print_error, print_warning, 
+        print_info, print_processing, print_panel, print_header,
+        create_table, create_page_processing_tree, add_processing_step, print_processing_tree_final
+    )
+    RICH_AVAILABLE = True
+except ImportError:
+    # Fallback to regular print if rich not available
+    RICH_AVAILABLE = False
+    def print_error(msg): print(f"❌ {msg}")
+    def print_success(msg): print(f"✅ {msg}")
+    def print_warning(msg): print(f"⚠️ {msg}")
+    def print_info(msg): print(f"ℹ️ {msg}")
+    def print_processing(msg): print(f"🔄 {msg}")
+    def print_header(msg): print(f"\n=== {msg} ===")
+    def print_panel(title, content, style=None): print(f"\n{title}:\n{content}")
+    def create_table(title=None): return None
+
 
 def print_immediate(*args, **kwargs):
     """Print with immediate flush to ensure real-time output."""
@@ -35,6 +55,8 @@ class CrawlerOrchestrator:
             config_path: Path to configuration file
         """
         self.config = self._load_config(config_path)
+        self.current_processing_tree = None  # Store current processing tree for callbacks
+        self._seen_file_hashes = {}  # Track file hashes for duplicate detection
         self.web_crawler = None
         self.html_processor = HTMLProcessor(
             self.config.get('link_processing', {}), 
@@ -192,10 +214,26 @@ class CrawlerOrchestrator:
             chunks_uploaded = self.rag_uploader.upload_single_file_streaming(semantic_output_path)
             
             if chunks_uploaded > 0:
-                print(f"│  ├─ 📤 RAG: uploaded {chunks_uploaded} chunks")
+                # Use RAG success panel if current processing_tree is available
+                if self.current_processing_tree is not None:
+                    try:
+                        from ..console import add_processing_step
+                        add_processing_step(self.current_processing_tree, "rag_success", f"Uploaded {chunks_uploaded} chunks")
+                    except ImportError:
+                        print(f"│  ├─ 📤 RAG: uploaded {chunks_uploaded} chunks")
+                else:
+                    print(f"│  ├─ 📤 RAG: uploaded {chunks_uploaded} chunks")
                 
         except Exception as e:
-            print(f"❌ Streaming RAG upload failed for {semantic_output_path}: {e}")
+            # Use RAG error panel if current processing_tree is available
+            if self.current_processing_tree is not None:
+                try:
+                    from ..console import add_processing_step
+                    add_processing_step(self.current_processing_tree, "rag_error", str(e))
+                except ImportError:
+                    print(f"❌ Streaming RAG upload failed for {semantic_output_path}: {e}")
+            else:
+                print(f"❌ Streaming RAG upload failed for {semantic_output_path}: {e}")
             import traceback
             traceback.print_exc()
     
@@ -232,7 +270,8 @@ class CrawlerOrchestrator:
         # Display configuration before starting
         self._display_startup_config(output_formats)
         
-        # Setup directories
+        # Setup directories and show in table
+        self._display_directory_setup()
         self.file_manager.setup_directories()
         
         # Get domain configurations
@@ -255,48 +294,66 @@ class CrawlerOrchestrator:
         # Initialize progress formatter
         max_pages = crawl_config.get('max_pages', 100)
         
-        # Set progress formatter for file manager
-        
         # Get domain names for display
         domain_names = [d['domain'] for d in domains]
-        print(f"🚀 Starting crawl of {len(domain_names)} domains with max {max_pages} pages total")
+        print_processing(f"Starting crawl of {len(domain_names)} domains with max {max_pages} pages total")
         
-        # After the progress bar is initialized, route messages via formatter to
-        # ensure they render above the bar (avoid inline wrapping issues)
-        print(f"📊 Max pages per domain: {crawl_config.get('max_pages', 100)}")
-        print(f"⏱️  Delay before HTML capture: {crawl_config.get('delay_before_return_html', 2.5)}s")
-        print(f"🔄 Bypass cache: {crawl_config.get('bypass_cache', True)}")
-        print(f"🚫 Exclude section URLs (#): {crawl_config.get('exclude_section_urls', True)}")
-        print(f"🔁 Max retries per page: {crawl_config.get('max_retries', 3)}")
-        print(f"⏰ Retry delay: {crawl_config.get('retry_delay', 5)}s")
-        print("-" * 60)
+        # Display crawl settings in table
+        self._display_crawl_settings(crawl_config)
         
         async with WebCrawler(crawl_config, None) as crawler:
+            # Set up semantic queue callback for checkpointing
+            crawler.semantic_queue_callback = self.get_semantic_queue_for_checkpoint
+            
+            # Load checkpoint if it exists and restore semantic queue
+            visited_urls, crawl_queue, semantic_queue_data = crawler.load_checkpoint()
+            if semantic_queue_data and self.is_contextual_chunking_enabled():
+                # Restore tasks directly to semantic processor
+                self.semantic_processor.restore_pending_tasks_from_checkpoint(semantic_queue_data)
+                # Update counter to reflect restored tasks
+                self.semantic_queue_count += len(semantic_queue_data)
+                print(f"✅ Successfully restored {len(semantic_queue_data)} semantic tasks to queue")
+            elif self.is_contextual_chunking_enabled():
+                # If no semantic queue data but we have checkpoint, scan for unprocessed files
+                self._scan_and_queue_unprocessed_semantic_files()
+            
             # Process pages as they are crawled (streaming approach)
             page_count = 0
             try:
                 async for crawl_result in crawler.crawl_all_streaming(domains):
                     page_count += 1
                     try:
-                        # Start page processing with enhanced progress info
+                        # Create and display tree for page processing
                         current_domain = crawl_result.get('domain_config', {}).get('domain', 'unknown')
                         queue_size = crawl_result.get('queue_size', 0)
-                        print_immediate(f"\n┌─ 🗺️  Processing Page {page_count} of ∞")
-                        print_immediate(f"│  ┌─ 📊 Queue Status: {queue_size} URLs remaining")
-                        print_immediate(f"│  ├─ 🌐 Domain: {current_domain}")
-                        print_immediate(f"│  └─   URL: {crawl_result['url']}")
-                        print_immediate(f"│")
                         
-                        await self._process_single_page(crawl_result, output_formats)
+                        if RICH_AVAILABLE:
+                            # Use rich tree display following Rich patterns
+                            processing_tree = create_page_processing_tree(page_count, queue_size, current_domain, crawl_result['url'])
+                            self.current_processing_tree = processing_tree  # Store for callbacks
+                        else:
+                            # Fallback to old style
+                            processing_tree = None
+                            print_immediate(f"\n┌─ 🗺️  Processing Page {page_count} of ∞")
+                            print_immediate(f"│  ┌─ 📊 Queue Status: {queue_size} URLs remaining")
+                            print_immediate(f"│  ├─ 🌐 Domain: {current_domain}")
+                            print_immediate(f"│  └─   URL: {crawl_result['url']}")
+                            print_immediate(f"│")
+                        
+                        await self._process_single_page(crawl_result, output_formats, processing_tree)
                         results['processed_pages'].append(crawl_result['url'])
                         
                         # Check if it was a PDF redirect
                         is_pdf = 'pdf_redirect' in crawl_result
                         # Check for completed semantic tasks and display them
-                        self._display_semantic_results()
+                        self._display_semantic_results(processing_tree)
                         
-                        print_immediate(f"│  └─ ✅  Page {page_count} complete")
-                        print_immediate(f"└─ {'═' * 50}")  # Enhanced separator between pages
+                        if RICH_AVAILABLE:
+                            # Print the complete tree at the end
+                            print_processing_tree_final(processing_tree, page_count)
+                        else:
+                            print_immediate(f"│  └─ ✅  Page {page_count} complete")
+                            print_immediate(f"└─ {'═' * 50}")  # Enhanced separator between pages
                     except Exception as e:
                         error_info = {
                             'url': crawl_result['url'],
@@ -322,10 +379,14 @@ class CrawlerOrchestrator:
         # Get final statistics
         results['stats'] = self.file_manager.get_output_stats()
         
-        # Clean up duplicate and blank files if enabled
-        cleanup_stats = self.file_manager.remove_duplicate_and_blank_files()
-        if cleanup_stats['duplicates_removed'] > 0 or cleanup_stats['blank_files_removed'] > 0:
-            results['cleanup_stats'] = cleanup_stats
+        # Clean up only blank files if enabled (duplicates handled per-file during processing)
+        markdown_config = self.config.get('markdown_processing', {})
+        if markdown_config.get('remove_blank_files', False):
+            # Call with skip_duplicates=True since we handle duplicates per-file now
+            cleanup_stats = self.file_manager.remove_duplicate_and_blank_files(skip_duplicates=True)
+            if cleanup_stats['blank_files_removed'] > 0:
+                results['cleanup_stats'] = cleanup_stats
+                print(f"   🗑️ Removed {cleanup_stats['blank_files_removed']} blank files")
         
         # Wait for all semantic chunking tasks to complete and stop worker
         if self.is_contextual_chunking_enabled():
@@ -377,7 +438,7 @@ class CrawlerOrchestrator:
         
         # Show final summary using progress formatter
         # Show final summary
-        print(f"\n🎉 Crawling completed!")
+        print_success("Crawling completed! 🎉")
         print(f"✅ Successfully processed: {len(results['processed_pages'])} pages")
         if results['errors']:
             print(f"❌ Processing errors: {len(results['errors'])} pages")
@@ -404,7 +465,140 @@ class CrawlerOrchestrator:
             except Exception as e:
                 print(f"   ⚠️ Could not remove checkpoint file: {e}")
     
-    def _display_semantic_results(self):
+    def get_semantic_queue_for_checkpoint(self):
+        """Get current semantic queue state for checkpoint saving."""
+        if not self.semantic_processor:
+            return []
+        
+        # Get pending tasks from the new tracking system
+        pending_tasks = []
+        
+        if hasattr(self.semantic_processor, 'pending_task_ids') and hasattr(self.semantic_processor, 'all_tasks'):
+            with self.semantic_processor.worker_lock:
+                for task_id in self.semantic_processor.pending_task_ids:
+                    task = self.semantic_processor.all_tasks.get(task_id)
+                    if task:
+                        pending_tasks.append({
+                            'task_id': task_id,
+                            'markdown_file_path': task.markdown_file_path,
+                            'semantic_output_path': task.semantic_output_path,
+                            'source_url': task.source_url
+                        })
+            
+            print(f"📊 Semantic checkpoint: {len(pending_tasks)} pending tasks saved")
+        
+        return pending_tasks
+    
+    
+    def _scan_and_queue_unprocessed_semantic_files(self):
+        """Scan for markdown files that need semantic processing during resume."""
+        if not self.semantic_processor:
+            return
+            
+        import os
+        from pathlib import Path
+        
+        # Get current output directories
+        docling_dir = self.file_manager.current_pages_dir
+        semantic_dir = self.file_manager.current_semantic_dir
+        
+        if not os.path.exists(docling_dir):
+            return
+            
+        # Find all markdown files
+        markdown_files = []
+        for root, dirs, files in os.walk(docling_dir):
+            for file in files:
+                if file.endswith('.md'):
+                    markdown_files.append(os.path.join(root, file))
+        
+        # Check which ones don't have corresponding semantic files
+        unprocessed_count = 0
+        for md_file in markdown_files:
+            semantic_output_path = self.semantic_processor.get_semantic_output_path(md_file)
+            
+            # Check if semantic file already exists
+            if not os.path.exists(semantic_output_path):
+                # Read URL from markdown file
+                try:
+                    with open(md_file, 'r', encoding='utf-8') as f:
+                        first_line = f.readline().strip()
+                        if first_line.startswith('# Source:'):
+                            source_url = first_line.replace('# Source:', '').strip()
+                            
+                            # Add to semantic queue
+                            self.semantic_processor.add_task(md_file, semantic_output_path, source_url)
+                            unprocessed_count += 1
+                        
+                except Exception as e:
+                    print(f"⚠️ Could not process {md_file}: {e}")
+        
+        if unprocessed_count > 0:
+            print(f"📥 Resume: Queued {unprocessed_count} unprocessed markdown files for semantic chunking")
+    
+    def _check_and_handle_duplicate(self, file_path: str, processing_tree = None) -> bool:
+        """
+        Check if a file is a duplicate and remove it if so.
+        
+        Args:
+            file_path: Path to the file to check
+            processing_tree: Optional processing tree for status updates
+            
+        Returns:
+            True if file should be processed further, False if it's a duplicate
+        """
+        # Only check duplicates if enabled in config
+        markdown_config = self.config.get('markdown_processing', {})
+        if not markdown_config.get('remove_duplicate_files', False):
+            return True
+            
+        try:
+            import os
+            import hashlib
+            
+            # Calculate hash of this file's content (excluding Source: line)
+            with open(file_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            # Skip the first line if it's a Source: line
+            if lines and lines[0].startswith('# Source:'):
+                content_to_hash = ''.join(lines[1:])
+            else:
+                content_to_hash = ''.join(lines)
+            
+            file_hash = hashlib.md5(content_to_hash.encode('utf-8')).hexdigest()
+            
+            # Check if we've seen this hash before
+            if not hasattr(self, '_seen_file_hashes'):
+                self._seen_file_hashes = {}
+            
+            if file_hash in self._seen_file_hashes:
+                # This is a duplicate - remove it
+                original_file = self._seen_file_hashes[file_hash]
+                try:
+                    os.remove(file_path)
+                    if processing_tree is not None:
+                        try:
+                            from ..console import add_processing_step
+                            add_processing_step(processing_tree, "warning", f"Removed duplicate file (matches {os.path.basename(original_file)})")
+                        except ImportError:
+                            print(f"│  ├─ ⚠️ Removed duplicate file (matches {os.path.basename(original_file)})")
+                    else:
+                        print(f"   ⚠️ Removed duplicate file: {os.path.basename(file_path)} (matches {os.path.basename(original_file)})")
+                    return False  # Don't process semantically
+                except Exception as e:
+                    print(f"   ❌ Error removing duplicate file {file_path}: {e}")
+                    return True  # Process anyway if removal failed
+            else:
+                # Store this hash for future comparisons
+                self._seen_file_hashes[file_hash] = file_path
+                return True  # Process semantically
+                
+        except Exception as e:
+            print(f"   ❌ Error checking for duplicate {file_path}: {e}")
+            return True  # Process anyway if check failed
+
+    def _display_semantic_results(self, processing_tree = None):
         """Check for and display completed semantic chunking results."""
         if not self.semantic_processor:
             return
@@ -413,86 +607,221 @@ class CrawlerOrchestrator:
         for task in self.semantic_processor.completed_tasks:
             if hasattr(task, 'success_info') and not hasattr(task, 'displayed'):
                 info = task.success_info
-                print_immediate(f"│  ├─ ✅  Semantic chunking completed")
+                # Use semantic panel if processing_tree is available
+                if processing_tree is not None:
+                    try:
+                        from ..console import add_processing_step
+                        add_processing_step(processing_tree, "semantic_panel", "Semantic chunking completed")
+                    except ImportError:
+                        print_immediate(f"│  ├─ ✅  Semantic chunking completed")
+                else:
+                    print_immediate(f"│  ├─ ✅  Semantic chunking completed")
                 task.displayed = True  # Mark as displayed
         
         # Check for newly failed tasks
         for task in self.semantic_processor.failed_tasks:
             if hasattr(task, 'error_info') and not hasattr(task, 'displayed'):
                 info = task.error_info
-                print_immediate(f"│  ├─ ❌ Semantic chunking failed")
-                if info['stderr']:
-                    error_msg = info['stderr'][:100] + "..." if len(info['stderr']) > 100 else info['stderr']
-                    print_immediate(f"│  └─ ⚠️  Error: {error_msg}")
+                # Use semantic error in processing_tree if available
+                if processing_tree is not None:
+                    try:
+                        from ..console import add_processing_step
+                        error_msg = info['stderr'][:100] + "..." if info.get('stderr') and len(info['stderr']) > 100 else info.get('stderr', 'Unknown error')
+                        add_processing_step(processing_tree, "semantic_panel", f"Semantic chunking failed: {error_msg}")
+                    except ImportError:
+                        print_immediate(f"│  ├─ ❌ Semantic chunking failed")
+                        if info['stderr']:
+                            error_msg = info['stderr'][:100] + "..." if len(info['stderr']) > 100 else info['stderr']
+                            print_immediate(f"│  └─ ⚠️  Error: {error_msg}")
+                else:
+                    print_immediate(f"│  ├─ ❌ Semantic chunking failed")
+                    if info['stderr']:
+                        error_msg = info['stderr'][:100] + "..." if len(info['stderr']) > 100 else info['stderr']
+                        print_immediate(f"│  └─ ⚠️  Error: {error_msg}")
                 task.displayed = True  # Mark as displayed
+    
+    def _display_directory_setup(self) -> None:
+        """Display directory setup information in a table."""
+        if not RICH_AVAILABLE:
+            return
+            
+        # Get file manager config
+        file_config = self.config.get('crawler', {}).get('file_manager', {})
+        
+        # Create timestamp for display
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Create directory setup table
+        table = create_table("📁 Directory Setup")
+        table.add_column("Type", style="cyan", width=15)
+        table.add_column("Directory Path", style="bright_blue", width=40)
+        table.add_column("Status", style="green", width=12)
+        
+        # Add directory rows
+        html_dir = file_config.get('html_output_dir', 'crawled_html')
+        pages_dir = file_config.get('pages_output_dir', 'crawled_docling')
+        pdf_dir = file_config.get('pdf_output_dir', 'crawled_pdf')
+        semantic_dir = file_config.get('semantic_output_dir', 'crawled_semantic')
+        
+        use_subfolders = file_config.get('use_domain_subfolders', True)
+        timestamp_display = f"\\{timestamp}" if use_subfolders else ""
+        
+        table.add_row("🌐 HTML", f"{html_dir}{timestamp_display}", "✅ Ready")
+        table.add_row("📄 Pages", f"{pages_dir}{timestamp_display}", "✅ Ready") 
+        table.add_row("📑 PDF", f"{pdf_dir}{timestamp_display}", "✅ Ready")
+        
+        # Only show semantic if enabled
+        if self.is_contextual_chunking_enabled():
+            table.add_row("🧠 Semantic", f"{semantic_dir}{timestamp_display}", "✅ Ready")
+            
+        console.print(table)
+    
+    def _display_crawl_settings(self, crawl_config: Dict[str, Any]) -> None:
+        """Display crawl configuration settings in a table."""
+        if not RICH_AVAILABLE:
+            # Fallback to old style
+            print(f"📊 Max pages per domain: {crawl_config.get('max_pages', 100)}")
+            print(f"⏱️  Delay before HTML capture: {crawl_config.get('delay_before_return_html', 2.5)}s")
+            print(f"🔄 Bypass cache: {crawl_config.get('bypass_cache', True)}")
+            print(f"🚫 Exclude section URLs (#): {crawl_config.get('exclude_section_urls', True)}")
+            print(f"🔁 Max retries per page: {crawl_config.get('max_retries', 3)}")
+            print(f"⏰ Retry delay: {crawl_config.get('retry_delay', 5)}s")
+            print("-" * 60)
+            return
+            
+        # Create crawl settings table
+        table = create_table("⚙️ Crawl Configuration")
+        table.add_column("Setting", style="cyan", width=25)
+        table.add_column("Value", style="bright_magenta", width=15)
+        table.add_column("Description", style="dim white", width=30)
+        
+        # Add configuration rows with colors
+        table.add_row(
+            "📊 Max pages per domain", 
+            str(crawl_config.get('max_pages', 100)),
+            "Maximum pages to crawl per domain"
+        )
+        table.add_row(
+            "⏱️ HTML capture delay", 
+            f"{crawl_config.get('delay_before_return_html', 2.5)}s",
+            "Wait time for JavaScript execution"
+        )
+        table.add_row(
+            "🔄 Bypass cache", 
+            str(crawl_config.get('bypass_cache', True)),
+            "Force fresh page loads"
+        )
+        table.add_row(
+            "🚫 Exclude sections", 
+            str(crawl_config.get('exclude_section_urls', True)),
+            "Skip URLs with # fragments"
+        )
+        table.add_row(
+            "🔁 Max retries", 
+            str(crawl_config.get('max_retries', 3)),
+            "Retry attempts for failed pages"
+        )
+        table.add_row(
+            "⏰ Retry delay", 
+            f"{crawl_config.get('retry_delay', 5)}s",
+            "Wait time between retry attempts"
+        )
+        
+        console.print(table)
+        print()  # Add spacing after table
     
     def _display_startup_config(self, output_formats: List[str]) -> None:
         """Display configuration information before starting crawl."""
-        print("\n" + "=" * 60)
-        print("🔧 CRAWLER CONFIGURATION")
-        print("=" * 60)
+        if not RICH_AVAILABLE:
+            # Fallback to old style
+            print("\n" + "=" * 60)
+            print("🔧 CRAWLER CONFIGURATION")
+            print("=" * 60)
+            print(f"📄 Output formats: {', '.join(output_formats)}")
+            print("=" * 60)
+            return
+            
+        print_header("🔧 Crawler Configuration")
         
-        # Output formats
-        print(f"📄 Output formats: {', '.join(output_formats)}")
-        
-        # File settings
+        # Basic settings table
         file_config = self.config.get('crawler', {}).get('file_manager', {})
-        print(f"📁 HTML directory: {file_config.get('html_output_dir', 'crawled_html')}")
-        print(f"📁 Pages directory: {file_config.get('pages_output_dir', 'crawled_docling')}")
-        print(f"📂 Use domain subfolders: {file_config.get('use_domain_subfolders', True)}")
-        print(f"🗑️  Delete existing folders: {file_config.get('delete_existing_folders', False)}")
         
-        # Domains
+        table = create_table("Basic Settings")
+        table.add_column("Setting", style="cyan", width=25)
+        table.add_column("Value", style="bright_blue", width=35)
+        
+        table.add_row("📄 Output formats", ', '.join(output_formats))
+        table.add_row("📁 HTML directory", file_config.get('html_output_dir', 'crawled_html'))
+        table.add_row("📁 Pages directory", file_config.get('pages_output_dir', 'crawled_docling'))
+        table.add_row("📂 Use domain subfolders", str(file_config.get('use_domain_subfolders', True)))
+        table.add_row("🗑️ Delete existing folders", str(file_config.get('delete_existing_folders', False)))
+        
+        console.print(table)
+        
+        # Domains table
         domains = self.get_domains_config()
-        print(f"\n🌐 Configured domains: {len(domains)}")
-        for i, domain in enumerate(domains, 1):
-            print(f"   {i}. {domain['domain']}")
-            print(f"      📊 Start URLs: {len(domain.get('start_urls', []))}")
-            if domain.get('js_code'):
-                print(f"      ⚡ JavaScript: Custom code defined")
-            if domain.get('wait_for'):
-                print(f"      ⏳ Wait condition: {domain['wait_for'][:50]}...")
-            if domain.get('html_classes_to_only_include'):
-                print(f"      🎯 Only include: {domain['html_classes_to_only_include']}")
+        if RICH_AVAILABLE and domains:
+            table = create_table("🌐 Configured Domains")
+            table.add_column("Domain", style="cyan")
+            table.add_column("URLs", justify="right", style="magenta")
+            table.add_column("Features", style="green")
+            
+            for domain in domains:
+                features = []
+                if domain.get('js_code'):
+                    features.append("⚡ JavaScript")
+                if domain.get('wait_for'):
+                    features.append("⏳ Wait condition")
+                if domain.get('html_classes_to_only_include'):
+                    features.append("🎯 Filtered content")
+                
+                table.add_row(
+                    domain['domain'],
+                    str(len(domain.get('start_urls', []))),
+                    ", ".join(features) if features else "Standard"
+                )
+            console.print(table)
         
-        # Global settings
+        # HTML Cleaning settings
         html_cleaning = self.config.get('html_cleaning', {})
         if html_cleaning:
-            print(f"\n🧹 HTML cleaning:")
-            print(f"   🔍 Remove CSS hidden: {html_cleaning.get('remove_css_hidden_elements', True)}")
-            print(f"   🏷️  Remove elements: {len(html_cleaning.get('html_elements_to_remove', []))}")
-            print(f"   🎨 Remove classes: {len(html_cleaning.get('html_classes_to_remove', []))}")
-            print(f"   💬 Remove comments: {len(html_cleaning.get('comment_blocks_to_remove', []))}")
+            cleaning_info = f"""🔍 Remove CSS hidden: {html_cleaning.get('remove_css_hidden_elements', True)}
+🏷️  Remove elements: {len(html_cleaning.get('html_elements_to_remove', []))}
+🎨 Remove classes: {len(html_cleaning.get('html_classes_to_remove', []))}
+💬 Remove comments: {len(html_cleaning.get('comment_blocks_to_remove', []))}"""
+            print_panel("🧹 HTML Cleaning", cleaning_info, "yellow")
         
         # Markdown processing
         markdown_processing = self.config.get('markdown_processing', {})
         if markdown_processing:
-            print(f"\n📝 Markdown processing:")
             sections_to_ignore = markdown_processing.get('sections_to_ignore', [])
+            sections_info = ""
             if sections_to_ignore:
-                print(f"   🚫 Ignore sections: {len(sections_to_ignore)}")
-                for section in sections_to_ignore[:3]:  # Show first 3 sections
-                    print(f"      - \"{section}\"")
+                sections_info += f"🚫 Ignore sections: {len(sections_to_ignore)}\n"
+                for section in sections_to_ignore[:3]:
+                    sections_info += f"   • \"{section}\"\n"
                 if len(sections_to_ignore) > 3:
-                    print(f"      ... and {len(sections_to_ignore) - 3} more")
-            print(f"   🔄 Remove duplicate lines: True (always enabled)")
-            print(f"   📑 Remove duplicate files: {markdown_processing.get('remove_duplicate_files', False)}")
-            print(f"   📄 Remove blank files: {markdown_processing.get('remove_blank_files', False)}")
+                    sections_info += f"   ... and {len(sections_to_ignore) - 3} more\n"
+            
+            sections_info += f"🔄 Remove duplicate lines: True (always enabled)\n"
+            sections_info += f"📑 Remove duplicate files: {markdown_processing.get('remove_duplicate_files', False)}\n"
+            sections_info += f"📄 Remove blank files: {markdown_processing.get('remove_blank_files', False)}"
+            
+            print_panel("📝 Markdown Processing", sections_info, "green")
         
-        # RAG upload  
+        # RAG upload
         if self.rag_uploader and self.rag_uploader.is_enabled():
             rag_config = self.config.get('rag_upload', {})
-            print(f"\n📤 RAG upload: Enabled")
-            print(f"   🔌 Client: {rag_config.get('client', 'ragflow').upper()}")
-            print(f"   🏷️  Naming: timestamp_domain (e.g., 20250814_112841_devices.myt.mu)")
             streaming_mode = "Real-time" if rag_config.get('streaming', True) else "Batch"
-            print(f"   🚀 Mode: {streaming_mode}")
+            rag_info = f"""🔌 Client: {rag_config.get('client', 'ragflow').upper()}
+🏷️  Naming: timestamp_domain format
+🚀 Mode: {streaming_mode}"""
+            print_panel("📤 RAG Upload: Enabled", rag_info, "cyan")
         else:
-            print(f"\n📤 RAG upload: Disabled")
-        
-        print("=" * 60)
+            print_panel("📤 RAG Upload", "Disabled", "red")
     
-    async def _process_single_page(self, crawl_result: Dict[str, Any], output_formats: List[str]) -> None:
+    async def _process_single_page(self, crawl_result: Dict[str, Any], output_formats: List[str], processing_tree = None) -> None:
         """
         Process a single crawled page.
         
@@ -564,7 +893,7 @@ class CrawlerOrchestrator:
         )
         
         # Save domain-cleaned HTML
-        self.file_manager.save_html(url, processed_result['processed_html'])
+        self.file_manager.save_html(url, processed_result['processed_html'], processing_tree)
         
         # Convert to requested formats
         for output_format in output_formats:
@@ -573,29 +902,42 @@ class CrawlerOrchestrator:
                 self.file_manager.save_content(
                     url, 
                     processed_result['processed_html'], 
-                    'html'
+                    'html',
+                    None,  # no conversion time for HTML
+                    processing_tree
                 )
             else:
                 # Convert using Docling
-                converted_content = self.document_converter.convert_with_cleanup(
+                converted_content, conversion_time = self.document_converter.convert_with_cleanup(
                     processed_result['temp_file_path'], 
                     output_format,
                     url
                 )
                 
                 # Save converted content
-                saved_path = self.file_manager.save_content(url, converted_content, output_format)
+                saved_path = self.file_manager.save_content(url, converted_content, output_format, conversion_time, processing_tree)
+                
+                # Check if this file is a duplicate before processing semantically
+                should_process_semantically = True
+                if output_format.lower() in ['markdown', 'md']:
+                    should_process_semantically = self._check_and_handle_duplicate(saved_path, processing_tree)
                 
                 # Start semantic chunking in separate process if enabled and format is markdown
                 if (self.is_contextual_chunking_enabled() and 
-                    output_format.lower() in ['markdown', 'md']):
+                    output_format.lower() in ['markdown', 'md'] and 
+                    should_process_semantically):
                     try:
                         semantic_output_path = self.semantic_processor.get_semantic_output_path(saved_path)
                         self.semantic_processor.add_task(saved_path, semantic_output_path, url)
                         # Increment queue counter and show status
                         self.semantic_queue_count += 1
+                        # Get actual queue size from semantic processor for accurate display
+                        total_pending = len(self.semantic_processor.pending_task_ids) if hasattr(self.semantic_processor, 'pending_task_ids') else self.semantic_processor.get_queue_size()
                         filename = Path(saved_path).name
-                        print_immediate(f"│  ├─ 🧠 Queued for semantic processing (Queue: {self.semantic_queue_count})")
+                        if processing_tree is not None:
+                            add_processing_step(processing_tree, "semantic", f"Queued for semantic processing (Queue: {total_pending})")
+                        else:
+                            print_immediate(f"│  ├─ 🧠 Queued for semantic processing (Queue: {total_pending})")
                     except Exception as e:
                         print_immediate(f"   ❌ Semantic chunking error for {url}: {e}")
         
@@ -703,40 +1045,52 @@ class CrawlerOrchestrator:
     
     def print_config_summary(self) -> None:
         """Print a summary of the current configuration."""
-        print("\n=== Configuration Summary ===")
+        if not RICH_AVAILABLE:
+            # Fallback to old style
+            print("\n=== Configuration Summary ===")
+            domains = self.get_domains_config()
+            print(f"Configured domains: {len(domains)}")
+            print("=" * 30)
+            return
+            
+        print_header("⚙️ Configuration Summary")
+        
+        # Create summary table
+        table = create_table("Configuration Overview")
+        table.add_column("Setting", style="cyan")
+        table.add_column("Value", style="green")
         
         # Domains
         domains = self.get_domains_config()
-        print(f"Configured domains: {len(domains)}")
-        for domain in domains:
-            print(f"  - {domain['domain']} ({len(domain.get('start_urls', []))} start URLs)")
-        
-        # Output formats
         output_formats = self.get_output_formats()
-        print(f"Output formats: {', '.join(output_formats)}")
-        
-        # File settings
         file_config = self.config.get('crawler', {}).get('file_manager', {})
-        print(f"HTML output directory: {file_config.get('html_output_dir', 'crawled_html')}")
-        print(f"Pages output directory: {file_config.get('pages_output_dir', 'crawled_docling')}")
-        print(f"Report output directory: {file_config.get('report_output_dir', 'crawled_report')}")
-        print(f"Delete existing folders: {file_config.get('delete_existing_folders', False)}")
+        
+        table.add_row("📁 Domains", str(len(domains)))
+        table.add_row("📄 Output formats", ', '.join(output_formats))
+        table.add_row("📂 HTML directory", file_config.get('html_output_dir', 'crawled_html'))
+        table.add_row("📁 Pages directory", file_config.get('pages_output_dir', 'crawled_docling'))
+        table.add_row("🗑️ Delete folders", str(file_config.get('delete_existing_folders', False)))
         
         # Contextual chunking
         chunking_config = self.config.get('contextual_chunking', {})
         is_enabled = chunking_config.get('enabled', False)
-        print(f"Contextual chunking: {'Enabled' if is_enabled else 'Disabled'}")
+        table.add_row("🧠 Contextual chunking", "Enabled" if is_enabled else "Disabled")
         if is_enabled:
-            print(f"  Model: {chunking_config.get('gemini_model', 'gemini-1.5-pro')}")
-            print(f"  Semantic output directory: {file_config.get('semantic_output_dir', 'crawled_semantic')}")
+            table.add_row("🤖 Model", chunking_config.get('gemini_model', 'gemini-1.5-pro'))
+        
+        console.print(table)
+        
+        # Domain details
+        if domains:
+            domain_info = ""
+            for domain in domains:
+                domain_info += f"• {domain['domain']} ({len(domain.get('start_urls', []))} URLs)\n"
+            print_panel("🌐 Configured Domains", domain_info.rstrip(), "blue")
         
         # Validation
         errors = self.validate_config()
         if errors:
-            print(f"\nConfiguration errors: {len(errors)}")
-            for error in errors:
-                print(f"  - {error}")
+            error_info = "\n".join(f"• {error}" for error in errors)
+            print_panel("❌ Configuration Errors", error_info, "red")
         else:
-            print("\nConfiguration is valid")
-        
-        print("=" * 30)
+            print_success("Configuration is valid")

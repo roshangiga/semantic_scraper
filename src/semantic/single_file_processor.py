@@ -183,14 +183,40 @@ class SingleFileSemanticProcessor:
                 # Get output
                 stdout, stderr = process.communicate()
                 
+                filename = Path(proc_info['input_file']).name
                 if process.returncode == 0:
-                    print(f"   ✅ Semantic chunking completed: {Path(proc_info['input_file']).name}")
-                    if stdout and stdout.strip():
-                        print(f"      {stdout.strip()}")
-                else:
-                    print(f"   ❌ Semantic chunking failed: {Path(proc_info['input_file']).name}")
+                    # Success case
+                    try:
+                        from ..console import add_processing_step
+                        print(f"✅ Semantic chunking completed: {filename}")
+                    except ImportError:
+                        print(f"   ✅ Semantic chunking completed: {filename}")
                     if stderr and stderr.strip():
-                        print(f"      Error: {stderr.strip()}")
+                        # Show processing info from stderr (our enhanced logging)
+                        for line in stderr.strip().split('\n'):
+                            if line.startswith('SUCCESS:') or line.startswith('PROCESSING:'):
+                                print(f"      {line}")
+                else:
+                    # Failure case - parse stderr for reason
+                    try:
+                        from ..console import add_processing_step
+                        failure_reason = "Unknown error"
+                        if stderr and stderr.strip():
+                            # Extract the main error reason
+                            stderr_lines = stderr.strip().split('\n')
+                            for line in stderr_lines:
+                                if line.startswith('SKIPPED:'):
+                                    failure_reason = line.replace('SKIPPED:', '').strip()
+                                    print(f"⚠️ Semantic processing skipped: {filename} - {failure_reason}")
+                                    return  # Don't treat skips as failures
+                                elif line.startswith('ERROR:'):
+                                    failure_reason = line.replace('ERROR:', '').strip()
+                                    break
+                        print(f"❌ Semantic chunking failed: {filename} - {failure_reason}")
+                    except ImportError:
+                        print(f"   ❌ Semantic chunking failed: {filename}")
+                        if stderr and stderr.strip():
+                            print(f"      Error: {stderr.strip()[:200]}...")  # Truncate long errors
         
         # Remove finished processes
         for proc_info in finished:
@@ -213,14 +239,41 @@ class SingleFileSemanticProcessor:
                 process = proc_info['process']
                 stdout, stderr = process.communicate(timeout=timeout)
                 
+                filename = Path(proc_info['input_file']).name
                 if process.returncode == 0:
-                    print(f"   ✅ Semantic chunking completed: {Path(proc_info['input_file']).name}")
-                    if stdout and stdout.strip():
-                        print(f"      {stdout.strip()}")
-                else:
-                    print(f"   ❌ Semantic chunking failed: {Path(proc_info['input_file']).name}")
+                    # Success case
+                    try:
+                        from ..console import add_processing_step
+                        print(f"✅ Semantic chunking completed: {filename}")
+                    except ImportError:
+                        print(f"   ✅ Semantic chunking completed: {filename}")
                     if stderr and stderr.strip():
-                        print(f"      Error: {stderr.strip()}")
+                        # Show processing info from stderr (our enhanced logging)
+                        for line in stderr.strip().split('\n'):
+                            if line.startswith('SUCCESS:') or line.startswith('PROCESSING:'):
+                                print(f"      {line}")
+                else:
+                    # Failure case - parse stderr for reason
+                    try:
+                        from ..console import add_processing_step
+                        failure_reason = "Unknown error"
+                        if stderr and stderr.strip():
+                            # Extract the main error reason
+                            stderr_lines = stderr.strip().split('\n')
+                            for line in stderr_lines:
+                                if line.startswith('SKIPPED:'):
+                                    failure_reason = line.replace('SKIPPED:', '').strip()
+                                    print(f"⚠️ Semantic processing skipped: {filename} - {failure_reason}")
+                                    continue  # Don't treat skips as failures, but continue processing other files
+                                elif line.startswith('ERROR:'):
+                                    failure_reason = line.replace('ERROR:', '').strip()
+                                    break
+                        if not any(line.startswith('SKIPPED:') for line in stderr_lines):
+                            print(f"❌ Semantic chunking failed: {filename} - {failure_reason}")
+                    except ImportError:
+                        print(f"   ❌ Semantic chunking failed: {filename}")
+                        if stderr and stderr.strip():
+                            print(f"      Error: {stderr.strip()[:200]}...")  # Truncate long errors
                         
             except subprocess.TimeoutExpired:
                 print(f"   ⏰ Semantic chunking timeout: {Path(proc_info['input_file']).name}")

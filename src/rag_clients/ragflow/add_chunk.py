@@ -11,6 +11,15 @@ import logging
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 from dotenv import load_dotenv
+try:
+    from ...console import console, print_error, print_success, print_warning, print_info, print_processing
+except ImportError:
+    # Fallback to regular print if rich not available
+    def print_error(msg): print(f"❌ {msg}")
+    def print_success(msg): print(f"✅ {msg}")
+    def print_warning(msg): print(f"⚠️ {msg}")
+    def print_info(msg): print(f"ℹ️ {msg}")
+    def print_processing(msg): print(f"🔄 {msg}")
 
 
 # Load environment variables from .env file
@@ -88,10 +97,11 @@ class RAGFlowClient:
                     
             except requests.exceptions.ConnectionError as e:
                 if "getaddrinfo failed" in str(e) or "NameResolutionError" in str(e):
-                    logging.error("❌ RAGFlow server unreachable - upload failed")
+                    # Don't print here - let the calling code handle it to avoid duplicates
+                    raise Exception("RAGFlow server unreachable - upload failed") from None
                 else:
-                    logging.error("❌ RAGFlow connection failed - upload failed")
-                raise Exception("RAGFlow connection failed") from None
+                    # Don't print here - let the calling code handle it to avoid duplicates
+                    raise Exception("RAGFlow connection failed - upload failed") from None
                     
             except requests.exceptions.RequestException as e:
                 # Check for specific server errors that should be retried
@@ -202,10 +212,8 @@ class RAGFlowClient:
             
             return None
         except Exception as e:
-            if "RAGFlow connection failed" not in str(e):
-                print(f"Error finding/creating dataset: {e}")
-                import traceback
-                traceback.print_exc()
+            # Don't print here - let the calling code handle display
+            # This avoids duplicate ugly error messages
             raise
     
     def create_document(self, dataset_id: str, name: str) -> dict:
@@ -325,7 +333,7 @@ def get_latest_timestamp_dir(base_dir: str = "crawled_semantic") -> Optional[str
     # Sort and get the latest
     timestamp_dirs.sort()
     latest = timestamp_dirs[-1]
-    print(f"📁 Using latest timestamp directory: {latest}")
+    print_info(f"Using latest timestamp directory: {latest}")
     return os.path.join(base_dir, latest)
 
 
@@ -346,7 +354,7 @@ def process_semantic_json(json_path: str, dataset_id: str, document_id: str,
             return 0
         
         print(f"📍 Source: {source}")
-        print(f"📊 Found {len(chunks)} chunks to upload")
+        print_info(f"Found {len(chunks)} chunks to upload")
         
         success_count = 0
         
@@ -355,7 +363,7 @@ def process_semantic_json(json_path: str, dataset_id: str, document_id: str,
             keywords = chunk.get('keywords', [])
             
             if not content:
-                print(f"  ⚠️ Chunk {i}: Empty content, skipping")
+                print_warning(f"Chunk {i}: Empty content, skipping")
                 continue
             
             try:
@@ -367,13 +375,13 @@ def process_semantic_json(json_path: str, dataset_id: str, document_id: str,
                 )
                 
                 chunk_id = result.get('data', {}).get('id', 'Unknown')
-                print(f"  ✅ Chunk {i}/{len(chunks)}: Uploaded (ID: {chunk_id})")
+                print_success(f"Chunk {i}/{len(chunks)}: Uploaded (ID: {chunk_id})")
                 success_count += 1
                 
             except Exception as e:
-                print(f"  ❌ Chunk {i}/{len(chunks)}: Failed - {e}")
+                print_error(f"Chunk {i}/{len(chunks)}: Failed - {e}")
         
-        print(f"📊 Completed: {success_count}/{len(chunks)} chunks uploaded successfully")
+        print_success(f"Completed: {success_count}/{len(chunks)} chunks uploaded successfully")
         return success_count
         
     except Exception as e:
@@ -470,11 +478,8 @@ def upload_chunks_from_data(data: Dict[str, Any], timestamp: str, domain: str, o
                 pass
     
     except Exception as e:
-        if "RAGFlow connection failed" not in str(e):
-            print(f"[ERROR] Error uploading to RAGFlow: {e}")
-            import traceback
-            traceback.print_exc()
-        # Don't print additional error for connection failures - already logged
+        # Don't print here - let the calling code handle display with proper panels
+        # This avoids duplicate ugly error messages
         return 0
 
 

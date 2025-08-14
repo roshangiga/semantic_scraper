@@ -96,15 +96,41 @@ def main():
         
         # Skip if file only contains source header (empty content)
         lines = content.strip().split('\n')
-        if len(lines) <= 2 and lines[0].startswith('Source:'):
-            print(f"Skipped: Empty content (only source header)")
+        non_empty_lines = [line.strip() for line in lines if line.strip()]
+        
+        # More detailed empty content check
+        if len(non_empty_lines) <= 3:
+            # Check if it's just source header + separator
+            has_source = any(line.startswith('# Source:') for line in lines)
+            if has_source and len(non_empty_lines) <= 3:
+                print(f"SKIPPED: Empty content - only {len(non_empty_lines)} non-empty lines (source header + separator)", file=sys.stderr)
+                sys.exit(0)
+        
+        # Check for PDF placeholder content
+        if 'PDF Document could not be extracted' in content or '[PDF Document' in content:
+            print(f"SKIPPED: PDF extraction placeholder - no meaningful content to process", file=sys.stderr)
+            sys.exit(0)
+        
+        # Check for very short content that might not be worth processing
+        if len(non_empty_lines) <= 8:
+            print(f"SKIPPED: Very short content - only {len(non_empty_lines)} non-empty lines", file=sys.stderr)
             sys.exit(0)
         
         # Process for semantic chunks
-        chunks = client.process_document_for_chunking(content)
-        
-        if not chunks:
-            print("Warning: No chunks generated", file=sys.stderr)
+        try:
+            print(f"PROCESSING: Starting semantic chunking for {len(non_empty_lines)} content lines ({len(content)} chars)", file=sys.stderr)
+            chunks = client.process_document_for_chunking(content)
+            
+            if not chunks:
+                print(f"ERROR: No chunks generated - LLM returned empty result (content length: {len(content)} chars)", file=sys.stderr)
+                sys.exit(1)
+                
+            print(f"SUCCESS: Generated {len(chunks)} semantic chunks", file=sys.stderr)
+            
+        except Exception as e:
+            print(f"ERROR: Semantic processing failed - {type(e).__name__}: {str(e)}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
             sys.exit(1)
         
         # Add source URL to the JSON structure

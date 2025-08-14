@@ -300,13 +300,14 @@ class FileManager:
         else:
             return os.path.join(base_dir, filename)
     
-    def save_html(self, url: str, content: str) -> str:
+    def save_html(self, url: str, content: str, processing_tree = None) -> str:
         """
         Save HTML content to file.
         
         Args:
             url: URL the content came from
             content: HTML content to save
+            processing_tree: Optional processing tree to add steps to
             
         Returns:
             Path to saved file
@@ -317,21 +318,35 @@ class FileManager:
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(content)
         
-        # Verify file was saved successfully
-        if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
-            print(f"│  ├─ ✔️ Saved HTML")
+        # Display save status
+        if processing_tree is not None:
+            # Add to processing tree using Rich pattern
+            try:
+                from ..console import add_processing_step
+                if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+                    add_processing_step(processing_tree, "file", "Saved HTML")
+                else:
+                    add_processing_step(processing_tree, "warning", "Failed to save HTML")
+            except ImportError:
+                pass  # Skip if console not available
         else:
-            print(f"│  ├─ ❌ Failed to save HTML")
-        sys.stdout.flush()
+            # Fallback to direct print
+            if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+                print(f"│  ├─ ✔️ Saved HTML")
+            else:
+                print(f"│  ├─ ❌ Failed to save HTML")
+            sys.stdout.flush()
+        
         return file_path
     
-    def save_markdown(self, url: str, content: str) -> str:
+    def save_markdown(self, url: str, content: str, processing_tree = None) -> str:
         """
         Save Markdown content to file.
         
         Args:
             url: URL the content came from
             content: Markdown content to save
+            processing_tree: Optional processing tree to add steps to
             
         Returns:
             Path to saved file
@@ -342,21 +357,27 @@ class FileManager:
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(content)
         
-        # Verify file was saved successfully
-        if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
-            print(f"│  ├─ ✔️ Saved Markdown")
+        # Display save status
+        if processing_tree is not None:
+            # Add to processing tree - note: this is handled by save_content now, so skip here
+            pass
         else:
-            print(f"│  ├─ ❌ Failed to save Markdown")
-        sys.stdout.flush()
+            # Fallback to direct print
+            if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+                print(f"│  ├─ ✔️ Saved Markdown")
+            else:
+                print(f"│  ├─ ❌ Failed to save Markdown")
+            sys.stdout.flush()
         return file_path
     
-    def save_docx(self, url: str, content: bytes) -> str:
+    def save_docx(self, url: str, content: bytes, processing_tree = None) -> str:
         """
         Save DOCX content to file.
         
         Args:
             url: URL the content came from
             content: DOCX content to save (as bytes)
+            processing_tree: Optional processing tree to add steps to
             
         Returns:
             Path to saved file
@@ -367,7 +388,12 @@ class FileManager:
         with open(file_path, 'wb') as f:
             f.write(content)
         
-        self._log(f"Saved DOCX: {file_path}")
+        # Display save status
+        if processing_tree is not None:
+            # Add to processing tree - note: this is handled by save_content now, so skip here
+            pass
+        else:
+            self._log(f"Saved DOCX: {file_path}")
         return file_path
     
     def save_semantic_chunks(self, url: str, content: str) -> str:
@@ -433,7 +459,7 @@ class FileManager:
         sys.stdout.flush()
         return file_path
     
-    def save_processed_html(self, url: str, content: str) -> str:
+    def save_processed_html(self, url: str, content: str, processing_tree = None) -> str:
         """
         Save processed HTML content to file.
         
@@ -453,7 +479,7 @@ class FileManager:
         self._log(f"Saved processed HTML: {file_path}")
         return file_path
     
-    def save_content(self, url: str, content: Any, output_format: str) -> str:
+    def save_content(self, url: str, content: Any, output_format: str, conversion_time: float = None, processing_tree = None) -> str:
         """
         Save content in specified format.
         
@@ -461,6 +487,7 @@ class FileManager:
             url: URL the content came from
             content: Content to save
             output_format: Format to save ('html', 'markdown', 'docx')
+            conversion_time: Optional conversion time in seconds
             
         Returns:
             Path to saved file
@@ -468,17 +495,53 @@ class FileManager:
         Raises:
             ValueError: If output format is not supported
         """
-        format_map = {
-            'html': self.save_processed_html,
-            'markdown': self.save_markdown,
-            'md': self.save_markdown,
-            'docx': self.save_docx
-        }
-        
-        if output_format.lower() not in format_map:
+        if output_format.lower() not in ['html', 'markdown', 'md', 'docx']:
             raise ValueError(f"Unsupported output format: {output_format}")
         
-        return format_map[output_format.lower()](url, content)
+        # Save the file with processing_tree parameter
+        if output_format.lower() == 'html':
+            saved_path = self.save_processed_html(url, content, processing_tree)
+        elif output_format.lower() in ['markdown', 'md']:
+            saved_path = self.save_markdown(url, content, processing_tree)
+        elif output_format.lower() == 'docx':
+            saved_path = self.save_docx(url, content, processing_tree)
+        else:
+            # Fallback shouldn't happen due to check above
+            saved_path = self.save_processed_html(url, content, processing_tree)
+        
+        # Display conversion time - use tree if available, otherwise print
+        if processing_tree is not None:
+            # Add to processing tree using Rich pattern
+            try:
+                from ..console import add_processing_step
+                import os
+                filename = os.path.basename(saved_path)
+                if conversion_time is not None:
+                    add_processing_step(processing_tree, "file", f"Saved {output_format.upper()}: {filename} (in {conversion_time:.2f}s)")
+                else:
+                    add_processing_step(processing_tree, "file", f"Saved {output_format.upper()}: {filename}")
+            except ImportError:
+                pass  # Skip if console not available
+        else:
+            # Fallback to direct print
+            try:
+                from ..console import print_file_saved
+                if conversion_time is not None:
+                    # Extract filename from saved_path for display
+                    import os
+                    filename = os.path.basename(saved_path)
+                    print(f"│  ├─", end=" ")
+                    print_file_saved(filename, output_format, conversion_time)
+                else:
+                    print(f"│  ├─ ✔️ Saved {output_format.upper()}")
+            except ImportError:
+                # Fallback if console import fails
+                if conversion_time is not None:
+                    print(f"│  ├─ ✔️ Saved {output_format.upper()} (converted in {conversion_time:.2f}s)")
+                else:
+                    print(f"│  ├─ ✔️ Saved {output_format.upper()}")
+        
+        return saved_path
     
     def get_output_stats(self) -> Dict[str, int]:
         """
@@ -568,7 +631,7 @@ class FileManager:
         # Check if entire file is empty or only whitespace
         return len(''.join(lines).strip()) == 0
     
-    def remove_duplicate_and_blank_files(self, directory: str = None) -> Dict[str, int]:
+    def remove_duplicate_and_blank_files(self, directory: str = None, skip_duplicates: bool = False) -> Dict[str, int]:
         """
         Remove duplicate and blank markdown files from the output directory.
         
@@ -587,7 +650,7 @@ class FileManager:
         stats = {'duplicates_removed': 0, 'blank_files_removed': 0}
         
         # Check if features are enabled
-        remove_duplicate_files = self.markdown_processing_config.get('remove_duplicate_files', False)
+        remove_duplicate_files = self.markdown_processing_config.get('remove_duplicate_files', False) and not skip_duplicates
         remove_blank_files = self.markdown_processing_config.get('remove_blank_files', False)
         
         if not remove_duplicate_files and not remove_blank_files:

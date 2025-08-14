@@ -43,11 +43,11 @@ class RAGFlowClient:
             response.raise_for_status()
             return response.json()
         except requests.exceptions.ConnectionError as e:
+            # Don't log here - let the calling code handle the display to avoid duplicates
             if "getaddrinfo failed" in str(e) or "NameResolutionError" in str(e):
-                logging.error("❌ RAGFlow server unreachable - upload failed")
+                raise Exception("RAGFlow server unreachable - upload failed") from None
             else:
-                logging.error("❌ RAGFlow connection failed - upload failed")
-            raise Exception("RAGFlow connection failed") from None
+                raise Exception("RAGFlow connection failed - upload failed") from None
         except Exception as e:
             logging.error(f"❌ RAGFlow API error: {e}")
             raise
@@ -78,11 +78,11 @@ class RAGFlowClient:
             response.raise_for_status()
             return response.json()
         except requests.exceptions.ConnectionError as e:
+            # Don't log here - let the calling code handle the display to avoid duplicates
             if "getaddrinfo failed" in str(e) or "NameResolutionError" in str(e):
-                logging.error("❌ RAGFlow server unreachable - upload failed")
+                raise Exception("RAGFlow server unreachable - upload failed") from None
             else:
-                logging.error("❌ RAGFlow connection failed - upload failed")
-            raise Exception("RAGFlow connection failed") from None
+                raise Exception("RAGFlow connection failed - upload failed") from None
         except Exception as e:
             logging.error(f"❌ RAGFlow API error: {e}")
             raise

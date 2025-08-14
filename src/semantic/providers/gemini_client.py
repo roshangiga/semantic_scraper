@@ -14,6 +14,16 @@ from typing import List, Dict, Any
 from ...prompts.contextual_chunking import ContextualChunking
 from .base_client import BaseLLMClient
 
+try:
+    from ...console import print_error, print_success, print_warning, print_info, print_processing
+except ImportError:
+    # Fallback to regular logging if rich not available
+    def print_error(msg): logging.error(f"❌ {msg}")
+    def print_success(msg): logging.info(f"✅ {msg}")
+    def print_warning(msg): logging.warning(f"⚠️ {msg}")
+    def print_info(msg): logging.info(f"ℹ️ {msg}")
+    def print_processing(msg): logging.info(f"🔄 {msg}")
+
 
 class GeminiClient(BaseLLMClient):
     """Client for interacting with Google Gemini API for contextual chunking."""
@@ -222,11 +232,11 @@ class GeminiClient(BaseLLMClient):
             if not isinstance(chunks, list):
                 raise ValueError("Response is not a list of chunks")
                 
-            logging.info(f"✅ Successfully processed document into {len(chunks)} chunks")
+            print_success(f"Successfully processed document into {len(chunks)} chunks")
             return chunks
             
         except json.JSONDecodeError as e:
-            logging.error(f"JSON parsing failed: {e}")
+            print_error(f"JSON parsing failed: {e}")
             error_pos = getattr(e, 'pos', 0)
             
             # Try to fix common JSON issues and retry parsing
@@ -234,7 +244,7 @@ class GeminiClient(BaseLLMClient):
                 fixed_response = self._fix_common_json_issues(response_text)
                 chunks = json.loads(fixed_response)
                 if isinstance(chunks, list):
-                    logging.warning("✅ JSON recovered after fixing")
+                    print_success("JSON recovered after fixing")
                     return chunks
                     
             except json.JSONDecodeError:
@@ -251,7 +261,7 @@ class GeminiClient(BaseLLMClient):
                             
                             chunks = json.loads(truncated)
                             if isinstance(chunks, list) and len(chunks) > 0:
-                                logging.warning(f"⚠️ JSON truncated, recovered {len(chunks)} chunks")
+                                print_warning(f"JSON truncated, recovered {len(chunks)} chunks")
                                 return chunks
                         except:
                             continue

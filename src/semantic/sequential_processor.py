@@ -24,7 +24,7 @@ class ChunkingTask:
 
 
 class SequentialSemanticProcessor:
-    """Sequential processor for semantic chunking using a threaded queue."""
+    """Sequential processor for semantic chunking using a single worker thread."""
     
     def __init__(self, config: Dict[str, Any]):
         """Initialize the sequential processor."""
@@ -36,6 +36,11 @@ class SequentialSemanticProcessor:
         self.completed_tasks = []
         self.failed_tasks = []
         self.total_added = 0
+        
+        # Track all tasks for checkpoint persistence (task_id -> ChunkingTask)
+        self.all_tasks = {}
+        self.pending_task_ids = set()  # Track which tasks are still pending
+        self.task_id_counter = 0
         
         # Callback for when tasks complete (for streaming RAG upload)
         self.completion_callback = None
@@ -155,15 +160,18 @@ class SequentialSemanticProcessor:
         while not self.stop_worker_event.is_set():
             try:
                 # Wait for a task with timeout
-                task = self.task_queue.get(timeout=1.0)
+                queue_item = self.task_queue.get(timeout=1.0)
                 
                 # Check for sentinel value (stop signal)
-                if task is None:
+                if queue_item is None:
                     self.task_queue.task_done()
                     break
                 
+                # Unpack task ID and task
+                task_id, task = queue_item
+                
                 # Process the task
-                self._process_single_task_thread_safe(task)
+                self._process_single_task_thread_safe(task_id, task)
                 self.task_queue.task_done()
                 
             except Empty:
@@ -174,7 +182,7 @@ class SequentialSemanticProcessor:
                 
         print(f"   🏁 Semantic chunking worker loop ended")
     
-    def _process_single_task_thread_safe(self, task: ChunkingTask):
+    def _process_single_task_thread_safe(self, task_id: int, task: ChunkingTask):
         """Process a single task in a thread-safe manner."""
         try:
             completed_count = len(self.completed_tasks)
@@ -185,6 +193,9 @@ class SequentialSemanticProcessor:
             success = self.process_single_task(task)
             
             with self.worker_lock:
+                # Remove from pending tasks
+                self.pending_task_ids.discard(task_id)
+                
                 if success:
                     self.completed_tasks.append(task)
                     
@@ -241,13 +252,40 @@ class SequentialSemanticProcessor:
             return False
         
         task = ChunkingTask(markdown_file_path, semantic_output_path, source_url)
-        self.task_queue.put(task)
         
+        # Track this task for checkpoint persistence
         with self.worker_lock:
+            task_id = self.task_id_counter
+            self.task_id_counter += 1
+            self.all_tasks[task_id] = task
+            self.pending_task_ids.add(task_id)
             self.total_added += 1
+        
+        # Add task with ID to queue
+        self.task_queue.put((task_id, task))
         
         # Semantic queue logging handled by orchestrator for clean progress bar
         return True
+    
+    def restore_pending_tasks_from_checkpoint(self, checkpoint_tasks):
+        """Restore pending tasks from checkpoint data."""
+        if not checkpoint_tasks:
+            return
+        
+        print(f"   📥 Restoring {len(checkpoint_tasks)} semantic tasks from checkpoint")
+        restored_count = 0
+        for task_data in checkpoint_tasks:
+            # Create new task and add to queue
+            if self.add_task(
+                task_data['markdown_file_path'],
+                task_data['semantic_output_path'], 
+                task_data['source_url']
+            ):
+                restored_count += 1
+            else:
+                print(f"   ⚠️ Failed to restore task: {task_data.get('markdown_file_path', 'unknown')}")
+        
+        print(f"   📊 Restored {restored_count}/{len(checkpoint_tasks)} tasks. Queue size: {self.get_queue_size()}, Pending: {len(self.pending_task_ids)}")
     
     def process_single_task(self, task: ChunkingTask) -> bool:
         """
@@ -259,6 +297,27 @@ class SequentialSemanticProcessor:
         Returns:
             True if successful, False otherwise
         """
+        # Skip very small files to speed up processing
+        try:
+            if os.path.exists(task.markdown_file_path):
+                file_size = os.path.getsize(task.markdown_file_path)
+                if file_size < 500:  # Skip files smaller than 500 bytes
+                    # Create a minimal JSON file indicating skipped
+                    os.makedirs(os.path.dirname(task.semantic_output_path), exist_ok=True)
+                    with open(task.semantic_output_path, 'w', encoding='utf-8') as f:
+                        import json
+                        json.dump({
+                            "source": task.source_url,
+                            "chunks": [],
+                            "note": "File too small for semantic chunking"
+                        }, f, indent=2)
+                    return True
+            else:
+                print(f"   ⚠️ File not found: {task.markdown_file_path}")
+                return False
+        except Exception as e:
+            print(f"   ⚠️ Error checking file size: {e}")
+        
         # Use the unified script with provider argument
         script_path = Path(__file__).parent / "process_single_file.py"
         
@@ -323,7 +382,7 @@ class SequentialSemanticProcessor:
                 encoding='utf-8',
                 errors='replace',
                 env=env,
-                timeout=300  # 5 minute timeout per task
+                timeout=180  # 3 minute timeout per task - API calls can be slow
             )
             
             if process.returncode == 0:
@@ -480,30 +539,101 @@ class SequentialSemanticProcessor:
         Returns:
             Corresponding semantic output path
         """
+        source_path = Path(source_file_path)
+        
+        # Extract the directory structure from source path
+        # Expected structure: crawled_docling/timestamp/domain/file.md
+        # Target structure: crawled_semantic/timestamp/domain/file.json
+        
+        parts = source_path.parts
+        if len(parts) >= 4:
+            # Find the index of the docling/pdf directory
+            docling_idx = -1
+            for i, part in enumerate(parts):
+                if 'docling' in part or 'pdf' in part:
+                    docling_idx = i
+                    break
+            
+            if docling_idx >= 0 and docling_idx + 2 < len(parts):
+                # Build semantic path: semantic_base/timestamp/domain/file.json
+                timestamp = parts[docling_idx + 1]
+                domain_and_file = parts[docling_idx + 2:]
+                
+                # Replace docling with semantic directory
+                if 'docling' in parts[docling_idx]:
+                    semantic_base = parts[docling_idx].replace('docling', 'semantic')
+                else:
+                    semantic_base = parts[docling_idx].replace('pdf', 'semantic')
+                
+                semantic_path = Path(semantic_base) / timestamp / Path(*domain_and_file)
+                
+                # Change extension to .json
+                if semantic_path.suffix == '.md':
+                    semantic_path = semantic_path.with_suffix('.json')
+                
+                # Ensure directory exists
+                semantic_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                return str(semantic_path)
+        
+        # Fallback: use current directories from file manager config  
         file_config = self.config.get('crawler', {}).get('file_manager', {})
         docling_dir = file_config.get('pages_output_dir', 'crawled_docling')
         pdf_dir = file_config.get('pdf_output_dir', 'crawled_pdf')
         semantic_dir = file_config.get('semantic_output_dir', 'crawled_semantic')
         
-        source_path = Path(source_file_path)
+        # Look for existing timestamped directories
+        existing_timestamp = None
+        for base_dir in [docling_dir, pdf_dir]:
+            if os.path.exists(base_dir):
+                # Find the most recent timestamp directory
+                timestamp_dirs = []
+                for item in os.listdir(base_dir):
+                    item_path = os.path.join(base_dir, item)
+                    if os.path.isdir(item_path):
+                        try:
+                            # Check if it matches timestamp format YYYYMMDD_HHMMSS
+                            from datetime import datetime
+                            datetime.strptime(item, '%Y%m%d_%H%M%S')
+                            timestamp_dirs.append(item)
+                        except ValueError:
+                            continue
+                
+                if timestamp_dirs:
+                    # Sort and get the latest timestamp
+                    timestamp_dirs.sort()
+                    existing_timestamp = timestamp_dirs[-1]
+                    break
         
-        # Determine which base directory to use
-        docling_base = Path(docling_dir)
-        pdf_base = Path(pdf_dir)
+        # If we found a timestamp, try to build the path with it
+        if existing_timestamp:
+            # Try to extract domain from source path
+            source_parts = source_path.parts
+            domain = None
+            filename = source_path.name
+            
+            # Look for domain in path structure
+            for part in source_parts:
+                if '.' in part and not part.endswith('.md'):
+                    domain = part
+                    break
+            
+            if domain:
+                semantic_path = Path(semantic_dir) / existing_timestamp / domain / filename
+                if semantic_path.suffix == '.md':
+                    semantic_path = semantic_path.with_suffix('.json')
+                
+                # Ensure directory exists
+                semantic_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                return str(semantic_path)
         
-        # Try to get relative path from either base directory
-        relative_path = None
-        try:
-            relative_path = source_path.relative_to(docling_base)
-        except ValueError:
-            try:
-                relative_path = source_path.relative_to(pdf_base)
-            except ValueError:
-                # If not relative to either, use just the filename
-                relative_path = source_path.name
-        
-        # Create semantic path and change extension to .json
-        semantic_path = Path(semantic_dir) / relative_path
+        # Last resort fallback
+        semantic_path = Path(semantic_dir) / source_path.name
         if semantic_path.suffix == '.md':
             semantic_path = semantic_path.with_suffix('.json')
+        
+        # Ensure directory exists
+        semantic_path.parent.mkdir(parents=True, exist_ok=True)
+        
         return str(semantic_path)

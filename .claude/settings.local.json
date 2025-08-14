@@ -10,7 +10,9 @@
       "Bash(move src/gemini_client.py src/semantic/gemini_client.py)",
       "Bash(mv:*)",
       "Bash(dir:*)",
-      "Bash(move:*)"
+      "Bash(move:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:rich.readthedocs.io)"
     ],
     "deny": []
   }

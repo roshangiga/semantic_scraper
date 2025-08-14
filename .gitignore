@@ -239,3 +239,4 @@ htmlcov/
 /crawled_semantic/
 /nul
 /problematic_urls.txt
+/crawler_checkpoint.json

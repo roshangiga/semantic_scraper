@@ -234,6 +234,35 @@ The configuration system supports:
 - Directory management options
 - Crawl4AI and Docling parameter configuration
 
+### Semantic Chunking Performance Issues
+
+**Current Problem**: Semantic chunking is extremely slow (8.5% completion rate: 18/211 files) despite using fast non-reasoning models.
+
+**Expected vs Actual Performance:**
+- **Expected**: Fast models like `gpt-4o-mini` and `gemini-2.5-flash` should process files in seconds
+- **Actual**: Tasks taking 3+ minutes or timing out, indicating underlying performance bottleneck
+
+**Investigation Needed:**
+- Root cause analysis of why chunking is slow despite fast models
+- Check if subprocess overhead, API calls, or processing logic is the bottleneck
+- Verify if API rate limiting or network issues are causing delays
+- Review the actual chunking logic in `src/semantic/process_single_file.py`
+
+**Temporary Workaround**: 
+- Timeout increased to 180 seconds to prevent premature task killing
+- File size filtering (<500 bytes) to skip minimal content files
+
+**Debug Commands:**
+```bash
+# Check completion rate
+find crawled_semantic -name "*.json" | wc -l
+find crawled_docling -name "*.md" | wc -l
+```
+
+**Files to investigate**: 
+- `src/semantic/sequential_processor.py:385` (timeout setting)
+- `src/semantic/process_single_file.py` (actual chunking logic)
+
 ### Error Handling
 
 The application includes comprehensive error handling:

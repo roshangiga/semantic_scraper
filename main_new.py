@@ -23,6 +23,26 @@ if sys.platform == 'win32':
 
 from src.scraper.crawler_orchestrator import CrawlerOrchestrator
 
+# Import rich console utilities
+try:
+    from src.console import (
+        console, print_success, print_error, print_warning, 
+        print_info, print_processing, print_panel, print_header,
+        setup_rich_logging, create_table
+    )
+    RICH_AVAILABLE = True
+except ImportError:
+    # Fallback to regular print if rich not available
+    RICH_AVAILABLE = False
+    def print_error(msg): print(f"❌ {msg}")
+    def print_success(msg): print(f"✅ {msg}")
+    def print_warning(msg): print(f"⚠️ {msg}")
+    def print_info(msg): print(f"ℹ️ {msg}")
+    def print_processing(msg): print(f"🔄 {msg}")
+    def print_header(msg): print(f"\n=== {msg} ===")
+    def print_panel(title, content, style=None): print(f"\n{title}:\n{content}")
+    def setup_rich_logging(): pass
+
 
 def create_argument_parser():
     """Create and configure argument parser."""
@@ -104,6 +124,10 @@ Examples:
 
 def setup_logging(verbose: bool, quiet: bool):
     """Setup logging configuration."""
+    # Setup rich logging if available
+    if RICH_AVAILABLE and not quiet:
+        setup_rich_logging()
+    
     if quiet:
         import logging
         logging.getLogger().setLevel(logging.ERROR)
@@ -123,7 +147,7 @@ def validate_config_file(config_path: str) -> bool:
         True if file exists and is readable
     """
     if not Path(config_path).exists():
-        print(f"Error: Configuration file not found: {config_path}")
+        print_error(f"Configuration file not found: {config_path}")
         return False
     
     try:
@@ -131,10 +155,10 @@ def validate_config_file(config_path: str) -> bool:
             f.read()
         return True
     except PermissionError:
-        print(f"Error: Cannot read configuration file: {config_path}")
+        print_error(f"Cannot read configuration file: {config_path}")
         return False
     except Exception as e:
-        print(f"Error reading configuration file: {e}")
+        print_error(f"Error reading configuration file: {e}")
         return False
 
 
@@ -149,35 +173,50 @@ def print_results(results: dict, quiet: bool = False):
     if quiet:
         return
     
-    print("\n=== Crawling Results ===")
+    print_header("Crawling Results")
     
     # Print processed pages
     processed_pages = results.get('processed_pages', [])
-    print(f"Successfully processed: {len(processed_pages)} pages")
-    
-    if processed_pages and not quiet:
-        print("Processed URLs:")
-        for url in processed_pages:
-            print(f"  + {url}")
+    print_success(f"Successfully processed: {len(processed_pages)} pages")
     
     # Print errors
     errors = results.get('errors', [])
     if errors:
-        print(f"\nErrors: {len(errors)}")
+        print_error(f"Errors: {len(errors)}")
         for error in errors:
-            print(f"  - {error['url']}: {error['error']}")
+            print_error(f"{error['url']}: {error['error']}")
     
-    # Print statistics
+    # Print statistics with rich table
     stats = results.get('stats', {})
-    if stats:
-        print(f"\nFiles generated:")
+    if stats and RICH_AVAILABLE:
+        table = create_table("Files Generated")
+        table.add_column("Format", style="cyan")
+        table.add_column("Count", justify="right", style="magenta")
+        
+        table.add_row("HTML", str(stats.get('html_files', 0)))
+        table.add_row("Markdown", str(stats.get('markdown_files', 0)))
+        table.add_row("DOCX", str(stats.get('docx_files', 0)))
+        table.add_row("PDF", str(stats.get('pdf_files', 0)))
+        table.add_row("[bold]Total[/bold]", f"[bold]{stats.get('total_files', 0)}[/bold]")
+        
+        console.print(table)
+    elif stats:
+        # Fallback for non-rich output
+        print_info("Files generated:")
         print(f"  HTML files: {stats.get('html_files', 0)}")
         print(f"  Markdown files: {stats.get('markdown_files', 0)}")
         print(f"  DOCX files: {stats.get('docx_files', 0)}")
         print(f"  PDF files: {stats.get('pdf_files', 0)}")
         print(f"  Total files: {stats.get('total_files', 0)}")
     
-    print("=" * 24)
+    # Show processed URLs in a panel if rich is available
+    if processed_pages and RICH_AVAILABLE and len(processed_pages) <= 20:
+        urls_text = "\n".join(f"✓ {url}" for url in processed_pages)
+        print_panel("Processed URLs", urls_text, "green")
+    elif processed_pages and not RICH_AVAILABLE:
+        print_info("Processed URLs:")
+        for url in processed_pages:
+            print(f"  ✓ {url}")
 
 
 async def main():
@@ -191,6 +230,10 @@ async def main():
     # Setup logging
     setup_logging(args.verbose, args.quiet)
     
+    # Show header (unless in quiet mode or just validating/showing summary)
+    if not args.quiet and not args.validate and not args.summary:
+        print_header("🚀 Craw4AI Docling - Web Crawler")
+    
     # Validate configuration file
     if not validate_config_file(args.config):
         sys.exit(1)
@@ -199,7 +242,7 @@ async def main():
     try:
         orchestrator = CrawlerOrchestrator(args.config)
     except Exception as e:
-        print(f"Error initializing crawler: {e}")
+        print_error(f"Error initializing crawler: {e}")
         sys.exit(1)
     
     # Handle delete folders option
@@ -209,19 +252,19 @@ async def main():
     # Validate configuration
     config_errors = orchestrator.validate_config()
     if config_errors:
-        print("Configuration validation errors:")
+        print_error("Configuration validation errors:")
         for error in config_errors:
-            print(f"  - {error}")
+            print_error(f"  {error}")
         
         if args.validate:
             sys.exit(1)
         else:
-            print("\nContinuing with invalid configuration...")
+            print_warning("Continuing with invalid configuration...")
     
     # Handle validate-only mode
     if args.validate:
         if not config_errors:
-            print("Configuration is valid")
+            print_success("Configuration is valid")
         sys.exit(0)
     
     # Handle summary mode
@@ -237,27 +280,31 @@ async def main():
         if args.domain:
             # Crawl specific domain
             if not args.quiet:
-                print(f"Crawling domain: {args.domain}")
+                print_info(f"Crawling domain: {args.domain}")
             results = await orchestrator.crawl_domain(args.domain, output_formats)
         else:
             # Crawl all domains
             if not args.quiet:
-                print("Crawling all configured domains...")
+                print_processing("Crawling all configured domains...")
             results = await orchestrator.crawl_and_convert(output_formats)
         
         # Handle errors
         if 'error' in results:
-            print(f"Error: {results['error']}")
+            print_error(f"Error: {results['error']}")
             sys.exit(1)
         
         # Print results
         print_results(results, args.quiet)
         
+        # Show completion message
+        if not args.quiet:
+            print_success("Crawling completed successfully! 🎉")
+        
     except KeyboardInterrupt:
-        print("\nCrawling interrupted by user")
+        print_warning("\nCrawling interrupted by user")
         sys.exit(1)
     except Exception as e:
-        print(f"Unexpected error: {e}")
+        print_error(f"Unexpected error: {e}")
         if args.verbose:
             import traceback
             traceback.print_exc()

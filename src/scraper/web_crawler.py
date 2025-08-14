@@ -39,6 +39,7 @@ class WebCrawler:
         self.failed_urls = []  # Track failed URLs with reasons
         self.raw_html_cache = {}  # Cache for raw HTML to avoid re-fetching
         self.progress_formatter = progress_formatter
+        self.semantic_queue_callback = None  # Callback to get semantic queue for checkpointing
         
     async def __aenter__(self):
         """Async context manager entry."""
@@ -557,12 +558,13 @@ class WebCrawler:
                 print(f"Warning: Could not read problematic URLs file: {e}")
         return False
     
-    def save_checkpoint(self, visited_urls: set, crawl_queue: deque):
+    def save_checkpoint(self, visited_urls: set, crawl_queue: deque, semantic_queue: list = None):
         """Save crawling checkpoint to resume later."""
         import json
         checkpoint = {
             'visited_urls': list(visited_urls),
-            'crawl_queue': list(crawl_queue)
+            'crawl_queue': list(crawl_queue),
+            'semantic_queue': semantic_queue or []
         }
         with open('crawler_checkpoint.json', 'w', encoding='utf-8') as f:
             json.dump(checkpoint, f)
@@ -575,12 +577,13 @@ class WebCrawler:
             try:
                 with open('crawler_checkpoint.json', 'r', encoding='utf-8') as f:
                     checkpoint = json.load(f)
-                print(f"📥 Loaded checkpoint with {len(checkpoint['visited_urls'])} visited URLs")
+                semantic_queue = checkpoint.get('semantic_queue', [])
+                print(f"📥 Loaded checkpoint with {len(checkpoint['visited_urls'])} visited URLs, {len(semantic_queue)} semantic tasks")
                 sys.stdout.flush()
-                return set(checkpoint['visited_urls']), deque(checkpoint['crawl_queue'])
+                return set(checkpoint['visited_urls']), deque(checkpoint['crawl_queue']), semantic_queue
             except Exception as e:
                 print(f"⚠️ Could not load checkpoint: {e}")
-        return set(), deque()
+        return set(), deque(), []
     
     def save_failed_urls(self):
         """Save failed URLs to a text file."""
@@ -615,9 +618,10 @@ class WebCrawler:
         
         # Load checkpoint if exists
         if hasattr(self, 'visited_urls'):
-            self.visited_urls, queue_from_checkpoint = self.load_checkpoint()
+            self.visited_urls, queue_from_checkpoint, semantic_queue_data = self.load_checkpoint()
             if queue_from_checkpoint:
                 self.queue = queue_from_checkpoint
+            # Note: semantic_queue_data is handled by the orchestrator
         
         # Process queue with streaming
         while self.queue and pages_crawled < max_pages:
@@ -671,7 +675,14 @@ class WebCrawler:
                 # Save checkpoint every N HTML pages
                 checkpoint_interval = self.config.get('save_checkpoint_every', 10)
                 if pages_crawled > 0 and pages_crawled % checkpoint_interval == 0:
-                    self.save_checkpoint(self.visited_urls, self.queue)
+                    # Get semantic queue data from callback if available
+                    semantic_queue = []
+                    if self.semantic_queue_callback:
+                        try:
+                            semantic_queue = self.semantic_queue_callback()
+                        except Exception as e:
+                            print(f"⚠️ Could not get semantic queue for checkpoint: {e}")
+                    self.save_checkpoint(self.visited_urls, self.queue, semantic_queue)
                 
                 # Get links from the two-phase result (already extracted from raw HTML)
                 if pages_crawled < max_pages:

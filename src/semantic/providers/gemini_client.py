@@ -53,12 +53,11 @@ class GeminiClient(BaseLLMClient):
                 # Add delay with exponential backoff for retries
                 if attempt > 0:
                     delay = (2 ** attempt) + random.uniform(1.0, 3.0)  # Exponential backoff (same as OpenAI)
-                    logging.info(f"⏳ Waiting {delay:.1f}s before retry attempt {attempt}...")
+                    logging.debug(f"⏳ Waiting {delay:.1f}s before retry attempt {attempt}...")
                     time.sleep(delay)
                 else:
                     # Add random delay before first request to prevent rate limiting
                     delay = random.uniform(0.5, 1.5)  # 0.5-1.5 second delay (same as OpenAI)
-                    logging.info(f"⏳ Adding random delay of {delay:.1f}s before API request...")
                     time.sleep(delay)
                 
                 response = self.model.generate_content(prompt)
@@ -139,16 +138,49 @@ class GeminiClient(BaseLLMClient):
         # Fix trailing commas before closing brackets/braces
         fixed = re.sub(r',\s*([}\]])', r'\1', fixed)
         
-        # Fix unescaped quotes in string values
-        # This is tricky - we need to escape quotes that are inside string values
-        # but not the structural quotes
-        
         # Fix missing commas between objects in arrays
         fixed = re.sub(r'}\s*{', r'},{', fixed)
         
         # Fix single quotes to double quotes (JSON requires double quotes)
         # Be careful not to replace apostrophes in content
         fixed = re.sub(r"'([^']*)':", r'"\1":', fixed)
+        
+        # Fix unescaped quotes in string values by finding and escaping them
+        # This handles cases where quotes appear in the middle of string values
+        try:
+            # Try to identify the problematic section and fix it
+            lines = fixed.split('\n')
+            for i, line in enumerate(lines):
+                # Look for lines with unescaped quotes in string values
+                if '"' in line and line.count('"') % 2 != 0:
+                    # Try to fix unescaped quotes in the middle of strings
+                    # Find patterns like: "text with "quote" in middle"
+                    line = re.sub(r'(?<!\\)"(?=[^"]*"[^"]*$)', r'\\"', line)
+                    lines[i] = line
+            fixed = '\n'.join(lines)
+        except Exception as e:
+            logging.debug(f"Warning: Could not fix unescaped quotes: {e}")
+        
+        # Try to truncate at the last valid JSON structure if parsing fails
+        # Find the last complete object or array
+        try:
+            # Find the last complete closing brace or bracket
+            last_closing = max(
+                fixed.rfind('}'),
+                fixed.rfind(']')
+            )
+            if last_closing > 0:
+                # Check if this creates valid JSON by trying different truncation points
+                for end_pos in range(last_closing + 1, len(fixed) + 1):
+                    test_json = fixed[:end_pos].rstrip()
+                    try:
+                        json.loads(test_json)
+                        fixed = test_json
+                        break
+                    except:
+                        continue
+        except Exception as e:
+            logging.debug(f"Warning: Could not truncate to valid JSON: {e}")
         
         return fixed
 
@@ -194,19 +226,37 @@ class GeminiClient(BaseLLMClient):
             return chunks
             
         except json.JSONDecodeError as e:
-            logging.error(f"Failed to parse JSON response from Gemini: {e}")
-            logging.error(f"Response text length: {len(response_text)}")
-            # Log only first 500 characters to avoid flooding logs
-            preview = response_text[:500] + "..." if len(response_text) > 500 else response_text
-            logging.error(f"Response preview: {preview}")
+            logging.error(f"JSON parsing failed: {e}")
+            error_pos = getattr(e, 'pos', 0)
             
             # Try to fix common JSON issues and retry parsing
             try:
                 fixed_response = self._fix_common_json_issues(response_text)
                 chunks = json.loads(fixed_response)
                 if isinstance(chunks, list):
-                    logging.warning("✅ Successfully parsed JSON after fixing common issues")
+                    logging.warning("✅ JSON recovered after fixing")
                     return chunks
+                    
+            except json.JSONDecodeError:
+                # Last resort: try progressive truncation to find valid JSON
+                try:
+                    for truncate_pos in range(error_pos, max(0, error_pos - 1000), -10):
+                        try:
+                            truncated = response_text[:truncate_pos].rstrip()
+                            # Try to close any open structures
+                            if truncated.count('[') > truncated.count(']'):
+                                truncated += ']' * (truncated.count('[') - truncated.count(']'))
+                            if truncated.count('{') > truncated.count('}'):
+                                truncated += '}' * (truncated.count('{') - truncated.count('}'))
+                            
+                            chunks = json.loads(truncated)
+                            if isinstance(chunks, list) and len(chunks) > 0:
+                                logging.warning(f"⚠️ JSON truncated, recovered {len(chunks)} chunks")
+                                return chunks
+                        except:
+                            continue
+                except:
+                    pass
             except:
                 pass
             

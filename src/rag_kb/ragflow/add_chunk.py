@@ -7,6 +7,7 @@ import json
 import os
 import requests
 import urllib3
+import logging
 from typing import Optional
 from dotenv import load_dotenv
 
@@ -37,9 +38,19 @@ class RAGFlowClient:
         if keywords:
             params['keywords'] = keywords
         
-        response = requests.get(url, headers=self.headers, params=params, verify=False)
-        response.raise_for_status()
-        return response.json()
+        try:
+            response = requests.get(url, headers=self.headers, params=params, verify=False)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.ConnectionError as e:
+            if "getaddrinfo failed" in str(e) or "NameResolutionError" in str(e):
+                logging.error("❌ RAGFlow server unreachable - upload failed")
+            else:
+                logging.error("❌ RAGFlow connection failed - upload failed")
+            raise Exception("RAGFlow connection failed") from None
+        except Exception as e:
+            logging.error(f"❌ RAGFlow API error: {e}")
+            raise
     
     def find_document_by_name(self, dataset_id: str, document_name: str) -> Optional[dict]:
         """Find a document by name in the dataset."""
@@ -62,9 +73,19 @@ class RAGFlowClient:
         if questions:
             data["questions"] = questions
         
-        response = requests.post(url, headers=self.headers, json=data, verify=False)
-        response.raise_for_status()
-        return response.json()
+        try:
+            response = requests.post(url, headers=self.headers, json=data, verify=False)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.ConnectionError as e:
+            if "getaddrinfo failed" in str(e) or "NameResolutionError" in str(e):
+                logging.error("❌ RAGFlow server unreachable - upload failed")
+            else:
+                logging.error("❌ RAGFlow connection failed - upload failed")
+            raise Exception("RAGFlow connection failed") from None
+        except Exception as e:
+            logging.error(f"❌ RAGFlow API error: {e}")
+            raise
 
 
 def process_and_upload_file(file_path: str, api_key: str, base_url: str, dataset_id: str, document_id: str) -> bool:

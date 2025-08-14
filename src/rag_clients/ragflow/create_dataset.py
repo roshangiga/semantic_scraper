@@ -6,6 +6,7 @@ Create dataset functionality for RAGFlow using direct API calls.
 import requests
 import time
 import urllib3
+import logging
 from typing import Optional
 
 # Disable SSL warnings
@@ -23,9 +24,19 @@ class RAGFlowClient:
     
     def get_datasets(self) -> list:
         """Get all existing datasets."""
-        response = requests.get(f"{self.base_url}/api/v1/datasets", headers=self.headers, verify=False)
-        response.raise_for_status()
-        return response.json()
+        try:
+            response = requests.get(f"{self.base_url}/api/v1/datasets", headers=self.headers, verify=False)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.ConnectionError as e:
+            if "getaddrinfo failed" in str(e) or "NameResolutionError" in str(e):
+                logging.error("❌ RAGFlow server unreachable - upload failed")
+            else:
+                logging.error("❌ RAGFlow connection failed - upload failed")
+            raise Exception("RAGFlow connection failed") from None
+        except Exception as e:
+            logging.error(f"❌ RAGFlow API error: {e}")
+            raise
     
     def delete_dataset(self, dataset_id: str) -> bool:
         """Delete a dataset by ID."""
@@ -40,9 +51,19 @@ class RAGFlowClient:
             "description": description,
             "permission": "team"
         }
-        response = requests.post(f"{self.base_url}/api/v1/datasets", headers=self.headers, json=data, verify=False)
-        response.raise_for_status()
-        return response.json()
+        try:
+            response = requests.post(f"{self.base_url}/api/v1/datasets", headers=self.headers, json=data, verify=False)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.ConnectionError as e:
+            if "getaddrinfo failed" in str(e) or "NameResolutionError" in str(e):
+                logging.error("❌ RAGFlow server unreachable - upload failed")
+            else:
+                logging.error("❌ RAGFlow connection failed - upload failed")
+            raise Exception("RAGFlow connection failed") from None
+        except Exception as e:
+            logging.error(f"❌ RAGFlow API error: {e}")
+            raise
     
     def find_dataset_by_name(self, name: str) -> Optional[dict]:
         """Find dataset by name."""

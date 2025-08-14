@@ -7,6 +7,7 @@ import json
 import os
 import requests
 import urllib3
+import logging
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 from dotenv import load_dotenv
@@ -84,6 +85,13 @@ class RAGFlowClient:
                 else:
                     print(f"    ❌ RAG API timeout after {max_retries + 1} attempts")
                     raise
+                    
+            except requests.exceptions.ConnectionError as e:
+                if "getaddrinfo failed" in str(e) or "NameResolutionError" in str(e):
+                    logging.error("❌ RAGFlow server unreachable - upload failed")
+                else:
+                    logging.error("❌ RAGFlow connection failed - upload failed")
+                raise Exception("RAGFlow connection failed") from None
                     
             except requests.exceptions.RequestException as e:
                 # Check for specific server errors that should be retried
@@ -194,9 +202,10 @@ class RAGFlowClient:
             
             return None
         except Exception as e:
-            print(f"Error finding/creating dataset: {e}")
-            import traceback
-            traceback.print_exc()
+            if "RAGFlow connection failed" not in str(e):
+                print(f"Error finding/creating dataset: {e}")
+                import traceback
+                traceback.print_exc()
             raise
     
     def create_document(self, dataset_id: str, name: str) -> dict:
@@ -461,9 +470,11 @@ def upload_chunks_from_data(data: Dict[str, Any], timestamp: str, domain: str, o
                 pass
     
     except Exception as e:
-        print(f"[ERROR] Error uploading to RAGFlow: {e}")
-        import traceback
-        traceback.print_exc()
+        if "RAGFlow connection failed" not in str(e):
+            print(f"[ERROR] Error uploading to RAGFlow: {e}")
+            import traceback
+            traceback.print_exc()
+        # Don't print additional error for connection failures - already logged
         return 0
 
 

@@ -241,6 +241,74 @@ class DocumentConverter:
         else:
             return '\n'.join(result_lines)
     
+    def _simple_html_to_text(self, html_file_path: str) -> str:
+        """
+        Simple HTML to text conversion without Docling (fallback).
+        
+        Args:
+            html_file_path: Path to HTML file
+            
+        Returns:
+            Simple text content
+        """
+        from bs4 import BeautifulSoup
+        
+        with open(html_file_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        # Remove script and style elements
+        for script in soup(["script", "style"]):
+            script.decompose()
+        
+        # Get text
+        text = soup.get_text()
+        
+        # Break into lines and remove leading/trailing space
+        lines = (line.strip() for line in text.splitlines())
+        # Break multi-headlines into a line each
+        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        # Drop blank lines
+        text = '\n'.join(chunk for chunk in chunks if chunk)
+        
+        return text
+    
+    def _is_problematic_content(self, html_file_path: str) -> bool:
+        """
+        Check if HTML content contains patterns that might cause Docling to crash.
+        
+        Args:
+            html_file_path: Path to HTML file
+            
+        Returns:
+            True if content is potentially problematic
+        """
+        try:
+            with open(html_file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # Check for patterns that commonly cause crashes
+            problematic_patterns = [
+                # Complex forms with many inputs
+                content.count('<input') > 100,
+                # Excessive script tags
+                content.count('<script') > 50,
+                # Large number of nested divs (potential memory issues)
+                content.count('<div') > 500,
+                # Very long single lines (can cause parsing issues)
+                any(len(line) > 50000 for line in content.split('\n')[:10]),
+                # Suspicious content patterns from the problematic URL
+                '?device=fixedphone' in content or 'fixedphone' in content,
+                # Check for potential infinite loops in CSS/JS
+                'while(' in content or 'for(' in content,
+            ]
+            
+            return any(problematic_patterns)
+        except Exception:
+            # If we can't read the file, assume it's problematic
+            return True
+    
     def convert_document(self, html_file_path: str, output_format: str) -> Any:
         """
         Convert document to specified format.
@@ -293,13 +361,58 @@ class DocumentConverter:
             Converted content in requested format
         """
         try:
-            result = self.convert_document(html_file_path, output_format)
+            # Check if Docling is enabled
+            if not self.config.get('enabled', True):
+                # Use simple fallback conversion
+                print(f"│  ├─ ℹ️ Docling disabled, using simple conversion")
+                result = self._simple_html_to_text(html_file_path)
+                if output_format.lower() in ['markdown', 'md'] and source_url:
+                    result = f"# Source: {source_url}\n\n---\n\n" + result
+                return result
             
-            # Add URL header for markdown format
-            if output_format.lower() in ['markdown', 'md'] and source_url:
-                url_header = f"# Source: {source_url}\n\n---\n\n"
-                result = url_header + result
+            # Check file size - skip very large files that might cause crashes
+            import os
+            file_size = os.path.getsize(html_file_path)
+            max_size_mb = self.config.get('max_file_size_mb', 10)
+            if file_size > max_size_mb * 1024 * 1024:  # Configurable MB limit for Docling
+                print(f"│  ├─ ⚠️ File too large for Docling ({file_size / 1024 / 1024:.1f}MB), using fallback")
+                # Use simple fallback conversion
+                result = self._simple_html_to_text(html_file_path)
+                if output_format.lower() in ['markdown', 'md'] and source_url:
+                    result = f"# Source: {source_url}\n\n---\n\n" + result
+                return result
             
-            return result
+            try:
+                # Additional check for potentially problematic content patterns
+                if self._is_problematic_content(html_file_path):
+                    print(f"│  ├─ ⚠️ Detected problematic content patterns, using fallback")
+                    result = self._simple_html_to_text(html_file_path)
+                    if output_format.lower() in ['markdown', 'md'] and source_url:
+                        result = f"# Source: {source_url}\n\n---\n\n" + result
+                    return result
+                
+                result = self.convert_document(html_file_path, output_format)
+                
+                # Add URL header for markdown format
+                if output_format.lower() in ['markdown', 'md'] and source_url:
+                    url_header = f"# Source: {source_url}\n\n---\n\n"
+                    result = url_header + result
+                
+                return result
+            except Exception as e:
+                # If Docling fails, use fallback conversion
+                print(f"│  ├─ ⚠️ Docling conversion failed, using fallback: {str(e)[:100]}")
+                try:
+                    result = self._simple_html_to_text(html_file_path)
+                    if output_format.lower() in ['markdown', 'md'] and source_url:
+                        result = f"# Source: {source_url}\n\n---\n\n" + result
+                    return result
+                except Exception as fallback_error:
+                    # Last resort - return error message
+                    error_msg = f"[Conversion failed: {str(e)[:100]}]"
+                    if output_format.lower() in ['markdown', 'md'] and source_url:
+                        return f"# Source: {source_url}\n\n---\n\n{error_msg}"
+                    return error_msg
+                    
         finally:
             self.cleanup_temp_file(html_file_path)

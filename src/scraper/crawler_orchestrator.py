@@ -64,6 +64,16 @@ class CrawlerOrchestrator:
             self.config.get('crawler', {}).get('file_manager', {}).get('report_output_dir', 'crawled_report')
         )
         
+        # Initialize RAG uploader
+        self.rag_uploader = None
+        self._init_rag_uploader()
+        
+        # Set up streaming RAG upload if enabled
+        if (self.rag_uploader and self.rag_uploader.is_enabled() and 
+            self.rag_uploader.streaming and self.semantic_processor):
+            self.semantic_processor.set_completion_callback(self._stream_to_rag)
+            print("🔗 Streaming RAG callback configured")
+        
         # Initialize progress formatter
         
     def _load_config(self, config_path: str) -> Dict[str, Any]:
@@ -135,6 +145,59 @@ class CrawlerOrchestrator:
             except Exception as e:
                 print(f"⚠️  Failed to initialize semantic processor: {e}")
                 self.semantic_processor = None
+    
+    def _init_rag_uploader(self):
+        """Initialize RAG uploader if configured."""
+        rag_config = self.config.get('rag_upload', {})
+        if rag_config.get('enabled', False):
+            try:
+                from ..rag_clients.rag_uploader import RAGUploader
+                self.rag_uploader = RAGUploader(rag_config)
+                if self.rag_uploader.is_enabled():
+                    client_name = rag_config.get('client', 'ragflow')
+                    print(f"📤 RAG upload enabled: {client_name}")
+                else:
+                    self.rag_uploader = None
+            except Exception as e:
+                print(f"⚠️  Failed to initialize RAG uploader: {e}")
+                self.rag_uploader = None
+    
+    def _stream_to_rag(self, semantic_output_path: str):
+        """Callback function to stream completed semantic chunks to RAG."""
+        
+        if not (self.rag_uploader and self.rag_uploader.is_enabled() and self.rag_uploader.streaming):
+            print(f"⚠️ RAG uploader not ready for streaming")
+            return
+            
+        try:
+            # Wait a moment for file to be fully written
+            import time
+            time.sleep(0.1)
+            
+            # Check if file exists and is a JSON file
+            if not os.path.exists(semantic_output_path):
+                print(f"⚠️ Semantic file not found for streaming: {semantic_output_path}")
+                return
+            
+            if not semantic_output_path.endswith('.json'):
+                print(f"⚠️ Expected JSON file for streaming, got: {semantic_output_path}")
+                return
+            
+            # Check file size to ensure it's not empty
+            file_size = os.path.getsize(semantic_output_path)
+            if file_size == 0:
+                print(f"⚠️ Semantic file is empty: {semantic_output_path}")
+                return
+            
+            chunks_uploaded = self.rag_uploader.upload_single_file_streaming(semantic_output_path)
+            
+            if chunks_uploaded > 0:
+                print(f"│  ├─ 📤 RAG: uploaded {chunks_uploaded} chunks")
+                
+        except Exception as e:
+            print(f"❌ Streaming RAG upload failed for {semantic_output_path}: {e}")
+            import traceback
+            traceback.print_exc()
     
     def is_contextual_chunking_enabled(self) -> bool:
         """Check if contextual chunking is enabled and available."""
@@ -221,7 +284,7 @@ class CrawlerOrchestrator:
                         print_immediate(f"\n┌─ 🗺️  Processing Page {page_count} of ∞")
                         print_immediate(f"│  ┌─ 📊 Queue Status: {queue_size} URLs remaining")
                         print_immediate(f"│  ├─ 🌐 Domain: {current_domain}")
-                        print_immediate(f"│  └─ 📍 URL: {crawl_result['url']}")
+                        print_immediate(f"│  └─   URL: {crawl_result['url']}")
                         print_immediate(f"│")
                         
                         await self._process_single_page(crawl_result, output_formats)
@@ -232,7 +295,7 @@ class CrawlerOrchestrator:
                         # Check for completed semantic tasks and display them
                         self._display_semantic_results()
                         
-                        print_immediate(f"│  └─ ✅ Page {page_count} complete")
+                        print_immediate(f"│  └─ ✅  Page {page_count} complete")
                         print_immediate(f"└─ {'═' * 50}")  # Enhanced separator between pages
                     except Exception as e:
                         error_info = {
@@ -268,6 +331,34 @@ class CrawlerOrchestrator:
         if self.is_contextual_chunking_enabled():
             print("   🔄 Finalizing semantic chunking...")
             self.semantic_processor.wait_and_stop()
+            
+            # Upload to RAG if enabled (batch mode only - streaming already happened)
+            if (self.rag_uploader and self.rag_uploader.is_enabled() and 
+                not self.rag_uploader.streaming):
+                try:
+                    # Get the semantic output directory with timestamp
+                    semantic_dir = self.config.get('crawler', {}).get('file_manager', {}).get('semantic_output_dir', 'crawled_semantic')
+                    # Find the latest timestamp directory
+                    import os
+                    if os.path.exists(semantic_dir):
+                        # Get all timestamp directories
+                        timestamp_dirs = [d for d in os.listdir(semantic_dir) 
+                                        if os.path.isdir(os.path.join(semantic_dir, d))]
+                        if timestamp_dirs:
+                            # Sort and get the latest
+                            timestamp_dirs.sort()
+                            latest_timestamp = timestamp_dirs[-1]
+                            semantic_timestamped_dir = os.path.join(semantic_dir, latest_timestamp)
+                            
+                            print("   📤 Starting batch RAG upload...")
+                            chunks_uploaded = self.rag_uploader.upload_from_directory(semantic_timestamped_dir)
+                            if chunks_uploaded > 0:
+                                results['rag_chunks_uploaded'] = chunks_uploaded
+                except Exception as e:
+                    print(f"   ❌ Failed to upload to RAG system: {e}")
+            elif (self.rag_uploader and self.rag_uploader.is_enabled() and 
+                  self.rag_uploader.streaming):
+                print("   🚀 RAG upload completed via real-time streaming")
         
         # Record end time
         end_time = datetime.now()
@@ -292,9 +383,14 @@ class CrawlerOrchestrator:
             print(f"❌ Processing errors: {len(results['errors'])} pages")
         if results.get('failed_urls', 0) > 0:
             print(f"🔄 Failed after retries: {results['failed_urls']} pages (saved to failed_urls.txt)")
+        if results.get('rag_chunks_uploaded', 0) > 0:
+            print(f"📤 RAG chunks uploaded: {results['rag_chunks_uploaded']}")
+        elif (self.rag_uploader and self.rag_uploader.is_enabled() and 
+              self.rag_uploader.streaming):
+            print(f"🚀 RAG upload completed via streaming")
             
-            duration = end_time - start_time
-            print(f"⏱️ Total time: {duration}")
+        duration = end_time - start_time
+        print(f"⏱️ Total time: {duration}")
         
         return results
     
@@ -317,10 +413,7 @@ class CrawlerOrchestrator:
         for task in self.semantic_processor.completed_tasks:
             if hasattr(task, 'success_info') and not hasattr(task, 'displayed'):
                 info = task.success_info
-                print_immediate(f"│  ├─ ✅ Semantic chunking completed")
-                if info['stdout']:
-                    print_immediate(f"│  │  {info['stdout']}")
-                print_immediate(f"│  └─ 📊 Progress: {info['completed']}/{info['total']} files processed")
+                print_immediate(f"│  ├─ ✅  Semantic chunking completed")
                 task.displayed = True  # Mark as displayed
         
         # Check for newly failed tasks
@@ -385,6 +478,17 @@ class CrawlerOrchestrator:
             print(f"   🔄 Remove duplicate lines: True (always enabled)")
             print(f"   📑 Remove duplicate files: {markdown_processing.get('remove_duplicate_files', False)}")
             print(f"   📄 Remove blank files: {markdown_processing.get('remove_blank_files', False)}")
+        
+        # RAG upload  
+        if self.rag_uploader and self.rag_uploader.is_enabled():
+            rag_config = self.config.get('rag_upload', {})
+            print(f"\n📤 RAG upload: Enabled")
+            print(f"   🔌 Client: {rag_config.get('client', 'ragflow').upper()}")
+            print(f"   🏷️  Naming: timestamp_domain (e.g., 20250814_112841_devices.myt.mu)")
+            streaming_mode = "Real-time" if rag_config.get('streaming', True) else "Batch"
+            print(f"   🚀 Mode: {streaming_mode}")
+        else:
+            print(f"\n📤 RAG upload: Disabled")
         
         print("=" * 60)
     

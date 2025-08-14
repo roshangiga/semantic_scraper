@@ -106,7 +106,6 @@ def main():
         with open(args.output, 'w', encoding='utf-8') as f:
             f.write(final_content)
         
-        print(f"Success: Generated {len(chunks)} semantic chunks")
         sys.exit(0)
         
     except Exception as e:

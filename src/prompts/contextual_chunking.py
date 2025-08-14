@@ -43,14 +43,26 @@ Hint for grouping chunks:
 - Description (Benefits/Rationale/use-cases/etc)
 - FAQs
 
-Header to ignore:
+
+Chunk size:
+- If a section is too large (~200 words), split into multiple chunks
+- If a section is too small (~20 words), merge with the previous chunk
+
+
+Headers to ignore:
 - [summary]
 - [pagination]
+- [page number]
+- cookie policy related
 
 ---
 
-2. **Context Retrieval:** Give a short succinct context to situate this chunk **within the overall document** for the purposes of improving search retrieval of the chunk. 
-Mention if it is for Consumer only or Enterprise only, but no need to mention it's from Mauritius Telecom. If URL is devices.myt.mu, include the device or devices it is about clearly.
+2. **Context Retrieval:** 
+
+- Give a short succinct context to situate this chunk **within the overall document** for the purposes of improving search retrieval of the chunk. 
+- Define some non-obvious key terms or abbreviations **only if needed**.
+- Mention if it is for Consumer only or Enterprise only, but no need to mention it's from Mauritius Telecom. 
+- If URL is devices.myt.mu, include the device or devices it is about clearly.
    
 ---
 
@@ -60,16 +72,13 @@ Mention if it is for Consumer only or Enterprise only, but no need to mention it
 
 3.2. Each keyword should clearly refer to the core product/service/app/feature, not just generic categories (e.g., use "my.t Traffic Watch app" instead of "app download support").
 
-3.3. At least one keyword must indicate the audience type, using "Consumer-only" or "Enterprise-only".
+3.3. At least one keyword must indicate the audience type, using "Consumer only" or "Enterprise only".
 
 3.3. At least one keyword must be the core product/service/app/feature name.
 
-3.4. We know its for Mauritius. Not a keyword. However if it is a specific location or another country, you may include it.
+3.4. We know its for Mauritius and Mauritius Telecom. Not a keyword. However if it is a specific location or another country, you may include it.
 
 3.5. If URL is devices.myt.mu, include the device or devices it is about in keywords.
-
----
-4. **Chunk size:** Do not make the chunks too small or too large. If the content is similar- e.g. list of store locations, do not split into smaller chunks.
 
 ---
 

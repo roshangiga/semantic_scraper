@@ -16,6 +16,8 @@ crawler:
 
   # Docling settings
   docling:
+    enabled: true  # Set to false to disable Docling conversion (use raw HTML instead)
+    max_file_size_mb: 10  # Maximum file size in MB for Docling conversion
     markdown:
       include_annotations: true
       mark_annotations: true
@@ -36,12 +38,34 @@ crawler:
     report_output_dir: "crawled_report"  # Directory for crawl reports
     filename_template: "{sanitized_url}"
     use_domain_subfolders: true  # Create subdirectories for each domain
+    files_rotate: 3  # Maximum number of timestamped folders to keep before deleting oldest
 
   # Output formats
   output_formats:
     - "markdown"
     # - "html" # Enable if needed
     # - "docx"  # Enable if needed
+
+# RAG (Retrieval-Augmented Generation) upload settings
+rag_upload:
+  enabled: true  # Set to true to enable automatic upload to RAG system
+  client: "ragflow"  # RAG client to use: ragflow | defy (more coming soon)
+  streaming: true  # When enabled=true: true=real-time upload, false=batch upload at end
+
+
+# Contextual chunking settings
+contextual_chunking:
+  enabled: true
+  provider: "gemini"  # openai | azure | gemini
+
+  # Models per provider
+  openai_model: "gpt-4o-mini"
+  gemini_model: "gemini-2.5-flash"
+
+  azure_endpoint: "https://scrapper-resource2025.cognitiveservices.azure.com/"
+  azure_api_version: "2024-12-01-preview"
+  azure_deployment: "gpt-5-mini"
+
 
 # Global HTML cleaning settings (applied to all domains)
 html_cleaning:
@@ -92,19 +116,6 @@ markdown_processing:
     # Examples:updatte
     # - "Contact Us"
     # - "Related Articles"
-
-# Contextual chunking settings
-contextual_chunking:
-  enabled: true
-  provider: "gemini"  # openai | azure | gemini
-
-  # Models per provider
-  openai_model: "gpt-4o-mini"
-  gemini_model: "gemini-2.5-flash"
-
-  azure_endpoint: "https://scrapper-resource2025.cognitiveservices.azure.com/"
-  azure_api_version: "2024-12-01-preview"
-  azure_deployment: "gpt-5-mini"
 
 # Link processing settings
 link_processing:

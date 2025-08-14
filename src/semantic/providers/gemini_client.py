@@ -52,14 +52,12 @@ class GeminiClient(BaseLLMClient):
             try:
                 # Add delay with exponential backoff for retries
                 if attempt > 0:
-                    base_delay = (2 ** attempt) * 10  # More aggressive: 20, 40, 80 seconds
-                    jitter = random.uniform(5.0, 10.0)  # Add more jitter
-                    delay = base_delay + jitter
+                    delay = (2 ** attempt) + random.uniform(1.0, 3.0)  # Exponential backoff (same as OpenAI)
                     logging.info(f"⏳ Waiting {delay:.1f}s before retry attempt {attempt}...")
                     time.sleep(delay)
                 else:
                     # Add random delay before first request to prevent rate limiting
-                    delay = random.uniform(5.0, 10.0)  # 5-10 second delay
+                    delay = random.uniform(0.5, 1.5)  # 0.5-1.5 second delay (same as OpenAI)
                     logging.info(f"⏳ Adding random delay of {delay:.1f}s before API request...")
                     time.sleep(delay)
                 

@@ -236,3 +236,6 @@ test_results/
 htmlcov/
 /crawled_docling/
 /crawled_pdf/
+/crawled_semantic/
+/nul
+/problematic_urls.txt

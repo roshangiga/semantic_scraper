@@ -121,7 +121,6 @@ def main():
         with open(args.output, 'w', encoding='utf-8') as f:
             json.dump(final_data, f, indent=2, ensure_ascii=False)
         
-        print(f"Success: Generated {len(chunks)} semantic chunks")
         sys.exit(0)
         
     except Exception as e:

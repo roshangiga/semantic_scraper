@@ -27,10 +27,10 @@ class CrawlerWrapper:
             try:
                 with open(self.problematic_urls_file, 'r', encoding='utf-8') as f:
                     urls = [line.strip() for line in f if line.strip()]
-                print(f"📋 Loaded {len(urls)} problematic URLs to skip")
+                print(f"[INFO] Loaded {len(urls)} problematic URLs to skip")
                 return set(urls)
             except Exception as e:
-                print(f"⚠️ Could not load problematic URLs: {e}")
+                print(f"[WARN] Could not load problematic URLs: {e}")
         return set()
     
     def save_problematic_url(self, url):
@@ -38,9 +38,9 @@ class CrawlerWrapper:
         try:
             with open(self.problematic_urls_file, 'a', encoding='utf-8') as f:
                 f.write(f"{url}\n")
-            print(f"🚫 Added problematic URL: {url}")
+            print(f"[EXCLUDE] Added problematic URL: {url}")
         except Exception as e:
-            print(f"⚠️ Could not save problematic URL: {e}")
+            print(f"[WARN] Could not save problematic URL: {e}")
     
     def get_last_processed_url_from_checkpoint(self):
         """Extract the last processed URL from checkpoint file."""
@@ -54,40 +54,55 @@ class CrawlerWrapper:
                 if visited_urls:
                     return visited_urls[-1]  # Return the most recently visited URL
             except Exception as e:
-                print(f"⚠️ Could not read checkpoint: {e}")
+                print(f"[WARN] Could not read checkpoint: {e}")
         return None
     
     def run_crawler(self, args):
         """Run the main crawler script."""
         cmd = [sys.executable, 'main_new.py'] + args
         
-        print(f"🚀 Starting crawler: {' '.join(cmd)}")
-        print(f"⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"[START] Starting crawler: {' '.join(cmd)}")
+        print(f"[TIME] Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("-" * 60)
         
         try:
-            # Run the crawler and capture output
-            process = subprocess.run(
+            # Run the crawler with real-time output streaming
+            process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 encoding='utf-8',
+                errors='replace',  # Replace problematic characters
                 bufsize=1,
                 universal_newlines=True
             )
             
-            # Print the output
-            if process.stdout:
-                print(process.stdout)
+            # Stream output in real-time
+            print("[DEBUG] Starting output streaming...")
+            while True:
+                output = process.stdout.readline()
+                if output == '' and process.poll() is not None:
+                    break
+                if output:
+                    # Handle Unicode issues for Windows terminal
+                    try:
+                        print(output.strip())
+                    except UnicodeEncodeError:
+                        # Fallback: encode as ASCII with replacement characters
+                        safe_output = output.strip().encode('ascii', 'replace').decode('ascii')
+                        print(safe_output)
+                    sys.stdout.flush()  # Force immediate output
             
-            return process.returncode
+            # Get the final return code
+            return_code = process.poll()
+            return return_code
             
         except KeyboardInterrupt:
-            print("\n⚠️ Crawler interrupted by user")
+            print("\n[WARN] Crawler interrupted by user")
             return 130  # Standard exit code for keyboard interrupt
         except Exception as e:
-            print(f"❌ Error running crawler: {e}")
+            print(f"[ERROR] Error running crawler: {e}")
             return 1
     
     def run_with_recovery(self, args):
@@ -99,34 +114,34 @@ class CrawlerWrapper:
             attempt += 1
             
             if attempt > 1:
-                print(f"\n🔄 Restart attempt {attempt}/{self.max_restart_attempts}")
-                print(f"⏳ Waiting {self.restart_delay} seconds before restart...")
+                print(f"\n[RESTART] Restart attempt {attempt}/{self.max_restart_attempts}")
+                print(f"[WAIT] Waiting {self.restart_delay} seconds before restart...")
                 time.sleep(self.restart_delay)
             
             # Run the crawler
             exit_code = self.run_crawler(args)
             
             if exit_code == 0:
-                print("\n✅ Crawler completed successfully!")
+                print("\n[SUCCESS] Crawler completed successfully!")
                 return 0
             elif exit_code == 130:  # Keyboard interrupt
-                print("\n⚠️ Crawler stopped by user")
+                print("\n[WARN] Crawler stopped by user")
                 return exit_code
             else:
-                print(f"\n❌ Crawler crashed with exit code: {exit_code}")
+                print(f"\n[ERROR] Crawler crashed with exit code: {exit_code}")
                 
                 # Try to identify the problematic URL from checkpoint
                 last_url = self.get_last_processed_url_from_checkpoint()
                 if last_url and last_url not in problematic_urls:
-                    print(f"🔍 Suspected problematic URL: {last_url}")
+                    print(f"[SUSPECT] Suspected problematic URL: {last_url}")
                     self.save_problematic_url(last_url)
                     problematic_urls.add(last_url)
                 
                 if attempt < self.max_restart_attempts:
-                    print(f"🔄 Will restart in {self.restart_delay} seconds... (attempt {attempt + 1}/{self.max_restart_attempts})")
+                    print(f"[RESTART] Will restart in {self.restart_delay} seconds... (attempt {attempt + 1}/{self.max_restart_attempts})")
                 else:
-                    print(f"💀 Maximum restart attempts ({self.max_restart_attempts}) reached")
-                    print("🚫 Giving up - check problematic_urls.txt for URLs that may be causing crashes")
+                    print(f"[FAILED] Maximum restart attempts ({self.max_restart_attempts}) reached")
+                    print("[STOP] Giving up - check problematic_urls.txt for URLs that may be causing crashes")
                     return exit_code
         
         return 1
@@ -134,7 +149,7 @@ class CrawlerWrapper:
 
 def main():
     """Main entry point for crawler wrapper."""
-    print("🛡️ Crawler Wrapper with Crash Recovery")
+    print("[WRAPPER] Crawler Wrapper with Crash Recovery")
     print("=" * 50)
     
     # Parse arguments to pass through to main crawler
@@ -154,10 +169,10 @@ def main():
     wrapper.restart_delay = known_args.restart_delay
     
     if known_args.no_recovery:
-        print("⚠️ Running without crash recovery")
+        print("[WARN] Running without crash recovery")
         exit_code = wrapper.run_crawler(unknown_args)
     else:
-        print(f"🔄 Crash recovery enabled (max {known_args.max_attempts} attempts)")
+        print(f"[RESTART] Crash recovery enabled (max {known_args.max_attempts} attempts)")
         exit_code = wrapper.run_with_recovery(unknown_args)
     
     return exit_code
@@ -168,8 +183,8 @@ if __name__ == "__main__":
         exit_code = main()
         sys.exit(exit_code)
     except KeyboardInterrupt:
-        print("\n⚠️ Wrapper interrupted by user")
+        print("\n[WARN] Wrapper interrupted by user")
         sys.exit(130)
     except Exception as e:
-        print(f"\n💥 Wrapper crashed: {e}")
+        print(f"\n[CRASH] Wrapper crashed: {e}")
         sys.exit(1)

@@ -8,6 +8,7 @@ import hashlib
 import sys
 from pathlib import Path
 from typing import Dict, Any, List, Set
+from datetime import datetime
 
 
 class FileManager:
@@ -31,16 +32,129 @@ class FileManager:
         self.filename_template = config.get('filename_template', '{sanitized_url}')
         self.delete_existing_folders = config.get('delete_existing_folders', False)
         self.use_domain_subfolders = config.get('use_domain_subfolders', True)
+        self.files_rotate = config.get('files_rotate', 5)
+        
+        # Create timestamp for this crawl session (or reuse existing one for recovery)
+        self.timestamp = self._get_or_create_timestamp()
+        
+        # Set up timestamped directories
+        self._setup_timestamped_dirs()
+    
+    def _get_or_create_timestamp(self) -> str:
+        """Get existing timestamp from recovery or create new one."""
+        # Check if this is a recovery (checkpoint file exists)
+        if os.path.exists('crawler_checkpoint.json'):
+            # Try to find the most recent timestamp directory
+            for base_dir in [self.html_output_dir, self.pages_output_dir, self.semantic_output_dir]:
+                if os.path.exists(base_dir):
+                    # Get all timestamp directories
+                    timestamp_dirs = []
+                    for item in os.listdir(base_dir):
+                        item_path = os.path.join(base_dir, item)
+                        if os.path.isdir(item_path):
+                            try:
+                                # Check if it matches timestamp format YYYYMMDD_HHMMSS
+                                datetime.strptime(item, '%Y%m%d_%H%M%S')
+                                timestamp_dirs.append(item)
+                            except ValueError:
+                                continue
+                    
+                    if timestamp_dirs:
+                        # Sort and get the latest timestamp
+                        timestamp_dirs.sort()
+                        latest_timestamp = timestamp_dirs[-1]
+                        print(f"[RECOVERY] Reusing existing timestamp: {latest_timestamp}")
+                        return latest_timestamp
+        
+        # No recovery or no existing timestamp found - create new one
+        new_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        print(f"[NEW] Created new timestamp: {new_timestamp}")
+        return new_timestamp
     
     def _log(self, msg: str) -> None:
         """Log via progress formatter if available, else print.
         """
         print(msg)
     
-    def setup_directories(self) -> None:
-        """Set up output directories."""
-        directories = [self.html_output_dir, self.pages_output_dir, self.pdf_output_dir, self.semantic_output_dir, self.report_output_dir]
+    def _setup_timestamped_dirs(self) -> None:
+        """Set up timestamped subdirectories for HTML, pages, PDF, and semantic."""
+        # Create timestamped subdirectories
+        self.html_timestamped_dir = os.path.join(self.html_output_dir, self.timestamp)
+        self.pages_timestamped_dir = os.path.join(self.pages_output_dir, self.timestamp)
+        self.pdf_timestamped_dir = os.path.join(self.pdf_output_dir, self.timestamp)
+        self.semantic_timestamped_dir = os.path.join(self.semantic_output_dir, self.timestamp)
         
+        # Update the instance variables to use timestamped dirs
+        self.current_html_dir = self.html_timestamped_dir
+        self.current_pages_dir = self.pages_timestamped_dir
+        self.current_pdf_dir = self.pdf_timestamped_dir
+        self.current_semantic_dir = self.semantic_timestamped_dir
+    
+    def _rotate_folders(self, base_dir: str) -> None:
+        """Rotate folders in base directory, keeping only the most recent files_rotate number.
+        
+        Args:
+            base_dir: Base directory to rotate folders in
+        """
+        if not os.path.exists(base_dir):
+            return
+        
+        # Get all timestamped directories
+        timestamped_dirs = []
+        for item in os.listdir(base_dir):
+            item_path = os.path.join(base_dir, item)
+            if os.path.isdir(item_path) and self._is_timestamp_format(item):
+                timestamped_dirs.append((item, item_path))
+        
+        # Sort by timestamp (folder name)
+        timestamped_dirs.sort(key=lambda x: x[0])
+        
+        # Delete oldest folders if we exceed the limit
+        while len(timestamped_dirs) >= self.files_rotate:
+            oldest_dir = timestamped_dirs.pop(0)
+            self._log(f"Rotating out old folder: {oldest_dir[1]}")
+            self._delete_directory_with_retry(oldest_dir[1])
+    
+    def _is_timestamp_format(self, folder_name: str) -> bool:
+        """Check if folder name matches timestamp format YYYYMMDD_HHMMSS.
+        
+        Args:
+            folder_name: Folder name to check
+            
+        Returns:
+            True if matches timestamp format
+        """
+        try:
+            datetime.strptime(folder_name, '%Y%m%d_%H%M%S')
+            return True
+        except ValueError:
+            return False
+    
+    def setup_directories(self) -> None:
+        """Set up output directories with rotation."""
+        # Base directories for timestamped folders
+        base_dirs = [self.html_output_dir, self.pages_output_dir, self.pdf_output_dir, self.semantic_output_dir]
+        
+        # Perform rotation for each base directory
+        for base_dir in base_dirs:
+            os.makedirs(base_dir, exist_ok=True)
+            self._rotate_folders(base_dir)
+        
+        # Create timestamped subdirectories
+        os.makedirs(self.current_html_dir, exist_ok=True)
+        self._log(f"Created HTML directory: {self.current_html_dir}")
+        
+        os.makedirs(self.current_pages_dir, exist_ok=True)
+        self._log(f"Created pages directory: {self.current_pages_dir}")
+        
+        os.makedirs(self.current_pdf_dir, exist_ok=True)
+        self._log(f"Created PDF directory: {self.current_pdf_dir}")
+        
+        os.makedirs(self.current_semantic_dir, exist_ok=True)
+        self._log(f"Created semantic directory: {self.current_semantic_dir}")
+        
+        # Create other directories (report doesn't use timestamps)
+        directories = [self.report_output_dir]
         for directory in directories:
             if self.delete_existing_folders and os.path.exists(directory):
                 self._log(f"Deleting existing directory: {directory}")
@@ -156,7 +270,7 @@ class FileManager:
         parsed = urlparse(url)
         return parsed.netloc
     
-    def _get_output_path(self, base_dir: str, url: str, filename: str) -> str:
+    def _get_output_path(self, base_dir: str, url: str, filename: str, use_timestamp: bool = False) -> str:
         """
         Get the output path including domain subdirectory if enabled.
         
@@ -164,10 +278,20 @@ class FileManager:
             base_dir: Base output directory
             url: URL to extract domain from
             filename: Filename to save
+            use_timestamp: Whether to use timestamped directory
             
         Returns:
             Full output path
         """
+        # Use the current timestamped directory if specified
+        if use_timestamp:
+            if base_dir == self.html_output_dir:
+                base_dir = self.current_html_dir
+            elif base_dir == self.pages_output_dir:
+                base_dir = self.current_pages_dir
+            elif base_dir == self.pdf_output_dir:
+                base_dir = self.current_pdf_dir
+        
         if self.use_domain_subfolders:
             domain = self._get_domain_from_url(url)
             output_dir = os.path.join(base_dir, domain)
@@ -188,7 +312,7 @@ class FileManager:
             Path to saved file
         """
         filename = self.generate_filename(url, '.html')
-        file_path = self._get_output_path(self.html_output_dir, url, filename)
+        file_path = self._get_output_path(self.html_output_dir, url, filename, use_timestamp=True)
         
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(content)
@@ -213,7 +337,7 @@ class FileManager:
             Path to saved file
         """
         filename = self.generate_filename(url, '.md')
-        file_path = self._get_output_path(self.pages_output_dir, url, filename)
+        file_path = self._get_output_path(self.pages_output_dir, url, filename, use_timestamp=True)
         
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(content)
@@ -238,7 +362,7 @@ class FileManager:
             Path to saved file
         """
         filename = self.generate_filename(url, '.docx')
-        file_path = self._get_output_path(self.pages_output_dir, url, filename)
+        file_path = self._get_output_path(self.pages_output_dir, url, filename, use_timestamp=True)
         
         with open(file_path, 'wb') as f:
             f.write(content)
@@ -258,7 +382,7 @@ class FileManager:
             Path to saved file
         """
         filename = self.generate_filename(url, '.md')
-        file_path = self._get_output_path(self.semantic_output_dir, url, filename)
+        file_path = self._get_output_path(self.current_semantic_dir, url, filename)
         
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(content)
@@ -277,7 +401,7 @@ class FileManager:
             Path where semantic chunks would be saved
         """
         filename = self.generate_filename(url, '.md')
-        return self._get_output_path(self.semantic_output_dir, url, filename)
+        return self._get_output_path(self.current_semantic_dir, url, filename)
     
     def save_pdf_content(self, pdf_url: str, original_filename: str, content: str, output_format: str = 'markdown') -> str:
         """
@@ -295,7 +419,7 @@ class FileManager:
         # Create filename with original PDF name reference
         extension = '.md' if output_format.lower() in ['markdown', 'md'] else f'.{output_format}'
         filename = self._sanitize_url_for_filename(original_filename).replace('.pdf', '').replace('.PDF', '') + extension
-        file_path = self._get_output_path(self.pdf_output_dir, pdf_url, filename)
+        file_path = self._get_output_path(self.pdf_output_dir, pdf_url, filename, use_timestamp=True)
         
         # Add header with source information
         if output_format.lower() in ['markdown', 'md']:
@@ -321,7 +445,7 @@ class FileManager:
             Path to saved file
         """
         filename = self.generate_filename(url, '_processed.html')
-        file_path = self._get_output_path(self.pages_output_dir, url, filename)
+        file_path = self._get_output_path(self.pages_output_dir, url, filename, use_timestamp=True)
         
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(content)
@@ -371,25 +495,25 @@ class FileManager:
             'total_files': 0
         }
         
-        # Count HTML files (including in subdirectories if domain subfolders are used)
-        if os.path.exists(self.html_output_dir):
-            for root, dirs, files in os.walk(self.html_output_dir):
+        # Count HTML files in current timestamped directory
+        if os.path.exists(self.current_html_dir):
+            for root, dirs, files in os.walk(self.current_html_dir):
                 for file in files:
                     if file.endswith('.html'):
                         stats['html_files'] += 1
         
-        # Count other files (including in subdirectories if domain subfolders are used)
-        if os.path.exists(self.pages_output_dir):
-            for root, dirs, files in os.walk(self.pages_output_dir):
+        # Count other files in current timestamped directory
+        if os.path.exists(self.current_pages_dir):
+            for root, dirs, files in os.walk(self.current_pages_dir):
                 for file in files:
                     if file.endswith('.md'):
                         stats['markdown_files'] += 1
                     elif file.endswith('.docx'):
                         stats['docx_files'] += 1
         
-        # Count PDF files  
-        if os.path.exists(self.pdf_output_dir):
-            for root, dirs, files in os.walk(self.pdf_output_dir):
+        # Count PDF files in current timestamped directory
+        if os.path.exists(self.current_pdf_dir):
+            for root, dirs, files in os.walk(self.current_pdf_dir):
                 for file in files:
                     if file.endswith('.md'):  # PDF content converted to markdown
                         stats['pdf_files'] += 1
@@ -449,13 +573,13 @@ class FileManager:
         Remove duplicate and blank markdown files from the output directory.
         
         Args:
-            directory: Directory to process (defaults to pages_output_dir)
+            directory: Directory to process (defaults to current pages directory)
             
         Returns:
             Dictionary with statistics about removed files
         """
         if directory is None:
-            directory = self.pages_output_dir
+            directory = self.current_pages_dir
         
         if not os.path.exists(directory):
             return {'duplicates_removed': 0, 'blank_files_removed': 0}

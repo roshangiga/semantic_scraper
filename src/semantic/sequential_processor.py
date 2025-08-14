@@ -37,6 +37,9 @@ class SequentialSemanticProcessor:
         self.failed_tasks = []
         self.total_added = 0
         
+        # Callback for when tasks complete (for streaming RAG upload)
+        self.completion_callback = None
+        
         # Threading control
         self.worker_thread = None
         self.stop_worker_event = threading.Event()
@@ -184,6 +187,13 @@ class SequentialSemanticProcessor:
             with self.worker_lock:
                 if success:
                     self.completed_tasks.append(task)
+                    
+                    # Call completion callback if set (for streaming RAG upload)
+                    if self.completion_callback:
+                        try:
+                            self.completion_callback(task.semantic_output_path)
+                        except Exception as e:
+                            print(f"   ⚠️ Error in completion callback: {e}")
                 else:
                     self.failed_tasks.append(task)
             
@@ -319,6 +329,14 @@ class SequentialSemanticProcessor:
             if process.returncode == 0:
                 # Suppress subprocess output - let orchestrator handle display
                 self.completed_tasks.append(task)
+                
+                # Call completion callback if set (for streaming RAG upload)
+                if self.completion_callback:
+                    try:
+                        self.completion_callback(task.semantic_output_path)
+                    except Exception as e:
+                        print(f"   ⚠️ Error in completion callback: {e}")
+                
                 # Return success info for orchestrator to display
                 task.success_info = {
                     'stdout': process.stdout.strip() if process.stdout else '',
@@ -434,6 +452,14 @@ class SequentialSemanticProcessor:
                 "failed": len(self.failed_tasks),
                 "pending": self.total_added - len(self.completed_tasks) - len(self.failed_tasks)
             }
+    
+    def set_completion_callback(self, callback):
+        """Set a callback function to be called when each task completes.
+        
+        Args:
+            callback: Function that takes the semantic output path as argument
+        """
+        self.completion_callback = callback
     
     def clear_queue(self):
         """Clear all tasks from the queue."""

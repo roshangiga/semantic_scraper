@@ -22,7 +22,8 @@ try:
     from ..console import (
         console, print_success, print_error, print_warning, 
         print_info, print_processing, print_panel, print_header,
-        create_table, create_page_processing_tree, add_processing_step, print_processing_tree_final
+        create_table, create_page_processing_tree, add_processing_step, print_processing_tree_final,
+        stop_page_live,
     )
     RICH_AVAILABLE = True
 except ImportError:
@@ -386,6 +387,13 @@ class CrawlerOrchestrator:
                 print(f"\n⚠️ Crawler stopped unexpectedly after {page_count} pages")
                 print(f"   Error: {str(e)[:200]}")
                 # Continue with cleanup even if crawler crashes
+            finally:
+                # Ensure the live panel is stopped and the terminal is restored
+                if RICH_AVAILABLE:
+                    try:
+                        stop_page_live()
+                    except Exception:
+                        pass
             
             # Save failed URLs if any
             if hasattr(crawler, 'failed_urls') and crawler.failed_urls:

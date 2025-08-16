@@ -276,8 +276,23 @@ class DocumentConverter:
         """
         from bs4 import BeautifulSoup
         
-        with open(html_file_path, 'r', encoding='utf-8') as f:
-            html_content = f.read()
+        # Try multiple encodings to handle problematic content
+        html_content = None
+        encodings = ['utf-8', 'utf-8-sig', 'latin1', 'cp1252', 'iso-8859-1']
+        
+        for encoding in encodings:
+            try:
+                with open(html_file_path, 'r', encoding=encoding) as f:
+                    html_content = f.read()
+                break
+            except UnicodeDecodeError:
+                continue
+        
+        if html_content is None:
+            # Last resort: read as binary and decode with error handling
+            with open(html_file_path, 'rb') as f:
+                raw_content = f.read()
+            html_content = raw_content.decode('utf-8', errors='ignore')
         
         soup = BeautifulSoup(html_content, 'html.parser')
         
@@ -381,7 +396,8 @@ class DocumentConverter:
             source_url: Optional source URL to include in markdown header
             
         Returns:
-            Tuple of (converted content, conversion_time_seconds)
+            Tuple of (converted content, conversion_time_seconds, fallback_message)
+            fallback_message is None if no fallback was used, otherwise contains the fallback reason
         """
         import time
         start_time = time.time()
@@ -390,35 +406,32 @@ class DocumentConverter:
             # Check if Docling is enabled
             if not self.config.get('enabled', True):
                 # Use simple fallback conversion
-                print(f"│  ├─ ℹ️ Docling disabled, using simple conversion")
                 result = self._simple_html_to_text(html_file_path)
                 if output_format.lower() in ['markdown', 'md'] and source_url:
                     result = f"# Source: {source_url}\n\n---\n\n" + result
                 conversion_time = time.time() - start_time
-                return result, conversion_time
+                return result, conversion_time, "Docling disabled, using simple conversion"
             
             # Check file size - skip very large files that might cause crashes
             import os
             file_size = os.path.getsize(html_file_path)
             max_size_mb = self.config.get('max_file_size_mb', 10)
             if file_size > max_size_mb * 1024 * 1024:  # Configurable MB limit for Docling
-                print(f"│  ├─ ⚠️ File too large for Docling ({file_size / 1024 / 1024:.1f}MB), using fallback")
                 # Use simple fallback conversion
                 result = self._simple_html_to_text(html_file_path)
                 if output_format.lower() in ['markdown', 'md'] and source_url:
                     result = f"# Source: {source_url}\n\n---\n\n" + result
                 conversion_time = time.time() - start_time
-                return result, conversion_time
+                return result, conversion_time, f"File too large for Docling ({file_size / 1024 / 1024:.1f}MB), using fallback"
             
             try:
                 # Additional check for potentially problematic content patterns
                 if self._is_problematic_content(html_file_path):
-                    print(f"│  ├─ ⚠️ Detected problematic content patterns, using fallback")
                     result = self._simple_html_to_text(html_file_path)
                     if output_format.lower() in ['markdown', 'md'] and source_url:
                         result = f"# Source: {source_url}\n\n---\n\n" + result
                     conversion_time = time.time() - start_time
-                    return result, conversion_time
+                    return result, conversion_time, "Detected problematic content patterns, using fallback"
                 
                 result = self.convert_document(html_file_path, output_format)
                 
@@ -428,23 +441,22 @@ class DocumentConverter:
                     result = url_header + result
                 
                 conversion_time = time.time() - start_time
-                return result, conversion_time
+                return result, conversion_time, None  # No fallback used
             except Exception as e:
                 # If Docling fails, use fallback conversion
-                print(f"│  ├─ ⚠️ Docling conversion failed, using fallback: {str(e)[:100]}")
                 try:
                     result = self._simple_html_to_text(html_file_path)
                     if output_format.lower() in ['markdown', 'md'] and source_url:
                         result = f"# Source: {source_url}\n\n---\n\n" + result
                     conversion_time = time.time() - start_time
-                    return result, conversion_time
+                    return result, conversion_time, f"Docling conversion failed, using fallback: {str(e)[:100]}"
                 except Exception as fallback_error:
                     # Last resort - return error message
                     error_msg = f"[Conversion failed: {str(e)[:100]}]"
                     conversion_time = time.time() - start_time
                     if output_format.lower() in ['markdown', 'md'] and source_url:
-                        return f"# Source: {source_url}\n\n---\n\n{error_msg}", conversion_time
-                    return error_msg, conversion_time
+                        return f"# Source: {source_url}\n\n---\n\n{error_msg}", conversion_time, f"Both Docling and fallback failed: {str(fallback_error)[:50]}"
+                    return error_msg, conversion_time, f"Both Docling and fallback failed: {str(fallback_error)[:50]}"
                     
         finally:
             self.cleanup_temp_file(html_file_path)

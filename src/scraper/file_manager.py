@@ -42,31 +42,31 @@ class FileManager:
     
     def _get_or_create_timestamp(self) -> str:
         """Get existing timestamp from recovery or create new one."""
-        # Check if this is a recovery (checkpoint file exists)
-        if os.path.exists('crawler_checkpoint.json'):
-            # Try to find the most recent timestamp directory
-            for base_dir in [self.html_output_dir, self.pages_output_dir, self.semantic_output_dir]:
-                if os.path.exists(base_dir):
-                    # Get all timestamp directories
-                    timestamp_dirs = []
-                    for item in os.listdir(base_dir):
-                        item_path = os.path.join(base_dir, item)
-                        if os.path.isdir(item_path):
-                            try:
-                                # Check if it matches timestamp format YYYYMMDD_HHMMSS
-                                datetime.strptime(item, '%Y%m%d_%H%M%S')
-                                timestamp_dirs.append(item)
-                            except ValueError:
-                                continue
-                    
-                    if timestamp_dirs:
-                        # Sort and get the latest timestamp
-                        timestamp_dirs.sort()
-                        latest_timestamp = timestamp_dirs[-1]
-                        print(f"[RECOVERY] Reusing existing timestamp: {latest_timestamp}")
+        # Always try to find the most recent timestamp directory first
+        for base_dir in [self.html_output_dir, self.pages_output_dir, self.semantic_output_dir]:
+            if os.path.exists(base_dir):
+                # Get all timestamp directories
+                timestamp_dirs = []
+                for item in os.listdir(base_dir):
+                    item_path = os.path.join(base_dir, item)
+                    if os.path.isdir(item_path):
+                        try:
+                            # Check if it matches timestamp format YYYYMMDD_HHMMSS
+                            datetime.strptime(item, '%Y%m%d_%H%M%S')
+                            timestamp_dirs.append(item)
+                        except ValueError:
+                            continue
+                
+                if timestamp_dirs:
+                    # Sort and get the latest timestamp
+                    timestamp_dirs.sort()
+                    latest_timestamp = timestamp_dirs[-1]
+                    # Only reuse if checkpoint exists (indicates we're resuming)
+                    if os.path.exists('crawler_checkpoint.json'):
+                        print(f"[RESUME] Reusing existing timestamp: {latest_timestamp}")
                         return latest_timestamp
         
-        # No recovery or no existing timestamp found - create new one
+        # No checkpoint or starting fresh - create new timestamp
         new_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         print(f"[NEW] Created new timestamp: {new_timestamp}")
         return new_timestamp
@@ -455,8 +455,6 @@ class FileManager:
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(content)
         
-        print(f"│  ├─ ✔️ Saved PDF content")
-        sys.stdout.flush()
         return file_path
     
     def save_processed_html(self, url: str, content: str, processing_tree = None) -> str:

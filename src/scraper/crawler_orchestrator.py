@@ -141,10 +141,11 @@ class CrawlerOrchestrator:
         chunking_config = self.config.get('contextual_chunking', {})
         if chunking_config.get('enabled', False):
             try:
-                from ..semantic.sequential_processor import SequentialSemanticProcessor
+                # Use external processor - separate process avoids access violations
+                from ..semantic.external_processor import ExternalSemanticProcessor
                 
                 provider = chunking_config.get('provider', 'gemini').lower()
-                self.semantic_processor = SequentialSemanticProcessor(self.config)
+                self.semantic_processor = ExternalSemanticProcessor(self.config)
                 
                 # Get the actual model name being used  
                 if provider == 'openai':
@@ -183,6 +184,20 @@ class CrawlerOrchestrator:
             except Exception as e:
                 print(f"⚠️  Failed to initialize RAG uploader: {e}")
                 self.rag_uploader = None
+    
+    def _check_semantic_progress(self, processing_tree = None):
+        """Check for completed semantic tasks and update display."""
+        if self.is_contextual_chunking_enabled():
+            newly_completed = self.semantic_processor.check_completed_tasks()
+            if newly_completed > 0:
+                status = self.semantic_processor.get_status()
+                if processing_tree is not None:
+                    try:
+                        from ..console import add_processing_step
+                        add_processing_step(processing_tree, "semantic_progress_panel", 
+                                          f"{status['completed']},{status['failed']},{status['total']},")
+                    except ImportError:
+                        print(f"   🧠 Semantic progress: {status['completed']}/{status['total']} completed")
     
     def _stream_to_rag(self, semantic_output_path: str):
         """Callback function to stream completed semantic chunks to RAG."""
@@ -305,17 +320,22 @@ class CrawlerOrchestrator:
             # Set up semantic queue callback for checkpointing
             crawler.semantic_queue_callback = self.get_semantic_queue_for_checkpoint
             
-            # Load checkpoint if it exists and restore semantic queue
-            visited_urls, crawl_queue, semantic_queue_data = crawler.load_checkpoint()
-            if semantic_queue_data and self.is_contextual_chunking_enabled():
-                # Restore tasks directly to semantic processor
-                self.semantic_processor.restore_pending_tasks_from_checkpoint(semantic_queue_data)
-                # Update counter to reflect restored tasks
-                self.semantic_queue_count += len(semantic_queue_data)
-                print(f"✅ Successfully restored {len(semantic_queue_data)} semantic tasks to queue")
-            elif self.is_contextual_chunking_enabled():
-                # If no semantic queue data but we have checkpoint, scan for unprocessed files
-                self._scan_and_queue_unprocessed_semantic_files()
+            # If checkpoint exists, load it
+            import os
+            if os.path.exists('crawler_checkpoint.json'):
+                # Load checkpoint and restore semantic queue
+                visited_urls, crawl_queue, semantic_queue_data = crawler.load_checkpoint()
+                # Set the loaded data on the crawler
+                if visited_urls:
+                    crawler.visited_urls = visited_urls
+                if crawl_queue:
+                    crawler.queue = crawl_queue
+                if semantic_queue_data and self.is_contextual_chunking_enabled():
+                    # Simple processor doesn't support checkpoint restore (simpler, safer approach)
+                    print(f"ℹ️ Found {len(semantic_queue_data)} previous semantic tasks - will rescan unprocessed files")
+                elif self.is_contextual_chunking_enabled():
+                    # If no semantic queue data but we have checkpoint, scan for unprocessed files
+                    self._scan_and_queue_unprocessed_semantic_files()
             
             # Process pages as they are crawled (streaming approach)
             page_count = 0
@@ -350,7 +370,7 @@ class CrawlerOrchestrator:
                         
                         if RICH_AVAILABLE:
                             # Print the complete tree at the end
-                            print_processing_tree_final(processing_tree, page_count)
+                            print_processing_tree_final(processing_tree, page_count, current_domain)
                         else:
                             print_immediate(f"│  └─ ✅  Page {page_count} complete")
                             print_immediate(f"└─ {'═' * 50}")  # Enhanced separator between pages
@@ -388,10 +408,12 @@ class CrawlerOrchestrator:
                 results['cleanup_stats'] = cleanup_stats
                 print(f"   🗑️ Removed {cleanup_stats['blank_files_removed']} blank files")
         
-        # Wait for all semantic chunking tasks to complete and stop worker
+        # Wait for all semantic chunking tasks to complete
         if self.is_contextual_chunking_enabled():
-            print("   🔄 Finalizing semantic chunking...")
-            self.semantic_processor.wait_and_stop()
+            print("   🔄 Waiting for semantic chunking to complete...")
+            # Process all remaining tasks sequentially (no threading)
+            results = self.semantic_processor.process_all_remaining()
+            print(f"   ✅ Semantic chunking completed: {results['completed']} succeeded, {results['failed']} failed")
             
             # Upload to RAG if enabled (batch mode only - streaming already happened)
             if (self.rag_uploader and self.rag_uploader.is_enabled() and 
@@ -473,17 +495,14 @@ class CrawlerOrchestrator:
         # Get pending tasks from the new tracking system
         pending_tasks = []
         
-        if hasattr(self.semantic_processor, 'pending_task_ids') and hasattr(self.semantic_processor, 'all_tasks'):
-            with self.semantic_processor.worker_lock:
-                for task_id in self.semantic_processor.pending_task_ids:
-                    task = self.semantic_processor.all_tasks.get(task_id)
-                    if task:
-                        pending_tasks.append({
-                            'task_id': task_id,
-                            'markdown_file_path': task.markdown_file_path,
-                            'semantic_output_path': task.semantic_output_path,
-                            'source_url': task.source_url
-                        })
+        # Simple processor uses direct task list (no complex tracking)
+        if hasattr(self.semantic_processor, 'pending_tasks'):
+            for task in self.semantic_processor.pending_tasks:
+                pending_tasks.append({
+                    'markdown_file_path': task.markdown_file_path,
+                    'semantic_output_path': task.semantic_output_path,
+                    'source_url': task.source_url
+                })
             
             print(f"📊 Semantic checkpoint: {len(pending_tasks)} pending tasks saved")
         
@@ -515,7 +534,13 @@ class CrawlerOrchestrator:
         # Check which ones don't have corresponding semantic files
         unprocessed_count = 0
         for md_file in markdown_files:
-            semantic_output_path = self.semantic_processor.get_semantic_output_path(md_file)
+            # Generate timestamped semantic output path using file manager  
+            import os
+            semantic_filename = os.path.basename(md_file).replace('.md', '.json')
+            domain_folder = os.path.dirname(md_file).split(os.sep)[-1]
+            semantic_domain_dir = os.path.join(self.file_manager.current_semantic_dir, domain_folder)
+            os.makedirs(semantic_domain_dir, exist_ok=True)
+            semantic_output_path = os.path.join(semantic_domain_dir, semantic_filename)
             
             # Check if semantic file already exists
             if not os.path.exists(semantic_output_path):
@@ -599,46 +624,47 @@ class CrawlerOrchestrator:
             return True  # Process anyway if check failed
 
     def _display_semantic_results(self, processing_tree = None):
-        """Check for and display completed semantic chunking results."""
+        """Check for and display completed semantic chunking results and progress."""
         if not self.semantic_processor:
             return
             
-        # Check for newly completed tasks
-        for task in self.semantic_processor.completed_tasks:
-            if hasattr(task, 'success_info') and not hasattr(task, 'displayed'):
-                info = task.success_info
-                # Use semantic panel if processing_tree is available
-                if processing_tree is not None:
-                    try:
-                        from ..console import add_processing_step
-                        add_processing_step(processing_tree, "semantic_panel", "Semantic chunking completed")
-                    except ImportError:
-                        print_immediate(f"│  ├─ ✅  Semantic chunking completed")
-                else:
-                    print_immediate(f"│  ├─ ✅  Semantic chunking completed")
-                task.displayed = True  # Mark as displayed
-        
-        # Check for newly failed tasks
-        for task in self.semantic_processor.failed_tasks:
-            if hasattr(task, 'error_info') and not hasattr(task, 'displayed'):
-                info = task.error_info
-                # Use semantic error in processing_tree if available
-                if processing_tree is not None:
-                    try:
-                        from ..console import add_processing_step
-                        error_msg = info['stderr'][:100] + "..." if info.get('stderr') and len(info['stderr']) > 100 else info.get('stderr', 'Unknown error')
-                        add_processing_step(processing_tree, "semantic_panel", f"Semantic chunking failed: {error_msg}")
-                    except ImportError:
-                        print_immediate(f"│  ├─ ❌ Semantic chunking failed")
-                        if info['stderr']:
-                            error_msg = info['stderr'][:100] + "..." if len(info['stderr']) > 100 else info['stderr']
-                            print_immediate(f"│  └─ ⚠️  Error: {error_msg}")
-                else:
-                    print_immediate(f"│  ├─ ❌ Semantic chunking failed")
-                    if info['stderr']:
-                        error_msg = info['stderr'][:100] + "..." if len(info['stderr']) > 100 else info['stderr']
-                        print_immediate(f"│  └─ ⚠️  Error: {error_msg}")
-                task.displayed = True  # Mark as displayed
+        # Display semantic queue progress if there are tasks
+        status = self.semantic_processor.get_status()
+        if status['total'] > 0:
+            # Show progress panel periodically (every 5 completed/failed tasks or when starting)
+            completed = status['completed']
+            failed = status['failed']
+            total = status['total']
+            
+            # Track last displayed progress to avoid spam
+            if not hasattr(self, '_last_semantic_progress'):
+                self._last_semantic_progress = 0
+                self._semantic_progress_shown = False
+            
+            current_processed = completed + failed
+            
+            # Show progress panel every time there's a change
+            should_show_progress = (
+                current_processed != self._last_semantic_progress or
+                (not self._semantic_progress_shown and status.get('pending', 0) > 0)
+            )
+            
+            if should_show_progress and processing_tree is not None:
+                try:
+                    from ..console import add_processing_step
+                    # Try to get the filename of currently processing task
+                    current_filename = ""
+                    # Show semantic processing status
+                    current_filename = "Processing semantic chunking..."
+                    
+                    progress_message = f"{completed},{failed},{total},{current_filename}"
+                    add_processing_step(processing_tree, "semantic_progress_panel", progress_message)
+                    self._last_semantic_progress = current_processed
+                    self._semantic_progress_shown = True
+                except ImportError:
+                    pass  # Fallback handled below
+            
+        # Semantic task completion is now handled in the worker process
     
     def _display_directory_setup(self) -> None:
         """Display directory setup information in a table."""
@@ -836,12 +862,18 @@ class CrawlerOrchestrator:
         # Check if this was a PDF redirect
         if 'pdf_redirect' in crawl_result:
             pdf_url = crawl_result['pdf_redirect']
-            print_immediate(f"│  ├─ 📥 Redirected to PDF document")
+            if processing_tree is not None:
+                add_processing_step(processing_tree, "info", "📥 Redirected to PDF document")
+            else:
+                print_immediate(f"│  ├─ 📥 Redirected to PDF document")
             
             # Process the PDF if enabled
             if self.config.get('link_processing', {}).get('process_pdf_links', False):
                 try:
-                    print(f"   📥 Downloading and processing PDF...")
+                    if processing_tree is not None:
+                        add_processing_step(processing_tree, "processing", "📥 Downloading and processing PDF...")
+                    else:
+                        print(f"   📥 Downloading and processing PDF...")
                     # Download and process the PDF - pass list of formats
                     pdf_formats = [fmt for fmt in output_formats if fmt.lower() in ['markdown', 'md']]
                     if pdf_formats:
@@ -856,16 +888,29 @@ class CrawlerOrchestrator:
                                     format
                                 )
                                 
+                                # Display saved message in the processing tree
+                                if processing_tree is not None:
+                                    add_processing_step(processing_tree, "success", "✔️ Saved PDF content")
+                                
                                 # Start semantic chunking for PDF markdown content
                                 if (self.is_contextual_chunking_enabled() and 
                                     format.lower() in ['markdown', 'md']):
                                     try:
-                                        semantic_output_path = self.semantic_processor.get_semantic_output_path(saved_path)
+                                        # Generate timestamped semantic output path using file manager
+                                        import os
+                                        semantic_filename = os.path.basename(saved_path).replace('.md', '.json')
+                                        domain_folder = os.path.dirname(saved_path).split(os.sep)[-1]
+                                        semantic_domain_dir = os.path.join(self.file_manager.current_semantic_dir, domain_folder)
+                                        os.makedirs(semantic_domain_dir, exist_ok=True)
+                                        semantic_output_path = os.path.join(semantic_domain_dir, semantic_filename)
                                         self.semantic_processor.add_task(saved_path, semantic_output_path, pdf_url)
                                     except Exception as e:
                                         print(f"   ⚠️ Error launching semantic chunking for PDF {pdf_url}: {e}")
                                         
-                            print_immediate(f"│  ├─ ✅ PDF processed successfully")
+                            if processing_tree is not None:
+                                add_processing_step(processing_tree, "success", "✅ PDF processed successfully")
+                            else:
+                                print_immediate(f"│  ├─ ✅ PDF processed successfully")
                             # Successfully processed PDF, no need for placeholder
                             return
                         else:
@@ -908,11 +953,18 @@ class CrawlerOrchestrator:
                 )
             else:
                 # Convert using Docling
-                converted_content, conversion_time = self.document_converter.convert_with_cleanup(
+                converted_content, conversion_time, fallback_message = self.document_converter.convert_with_cleanup(
                     processed_result['temp_file_path'], 
                     output_format,
                     url
                 )
+                
+                # Add fallback warning to console tree if fallback was used
+                if fallback_message:
+                    if RICH_AVAILABLE:
+                        add_processing_step(processing_tree, "fallback_panel", fallback_message)
+                    else:
+                        print(f"│  ├─ ⚠️ {fallback_message}")  # Fallback if console not available
                 
                 # Save converted content
                 saved_path = self.file_manager.save_content(url, converted_content, output_format, conversion_time, processing_tree)
@@ -927,23 +979,38 @@ class CrawlerOrchestrator:
                     output_format.lower() in ['markdown', 'md'] and 
                     should_process_semantically):
                     try:
-                        semantic_output_path = self.semantic_processor.get_semantic_output_path(saved_path)
+                        # Generate timestamped semantic output path using file manager
+                        import os
+                        semantic_filename = os.path.basename(saved_path).replace('.md', '.json')
+                        domain_folder = os.path.dirname(saved_path).split(os.sep)[-1]
+                        semantic_domain_dir = os.path.join(self.file_manager.current_semantic_dir, domain_folder)
+                        os.makedirs(semantic_domain_dir, exist_ok=True)
+                        semantic_output_path = os.path.join(semantic_domain_dir, semantic_filename)
                         self.semantic_processor.add_task(saved_path, semantic_output_path, url)
                         # Increment queue counter and show status
                         self.semantic_queue_count += 1
                         # Get actual queue size from semantic processor for accurate display
-                        total_pending = len(self.semantic_processor.pending_task_ids) if hasattr(self.semantic_processor, 'pending_task_ids') else self.semantic_processor.get_queue_size()
+                        total_pending = self.semantic_processor.get_queue_size()
                         filename = Path(saved_path).name
                         if processing_tree is not None:
-                            add_processing_step(processing_tree, "semantic", f"Queued for semantic processing (Queue: {total_pending})")
+                            # Show progress panel after adding task (includes queued message in title)
+                            try:
+                                status = self.semantic_processor.get_status()
+                                progress_message = f"{status['completed']},{status['failed']},{status['total']},{filename}"
+                                add_processing_step(processing_tree, "semantic_progress_panel", progress_message)
+                            except:
+                                pass
                         else:
-                            print_immediate(f"│  ├─ 🧠 Queued for semantic processing (Queue: {total_pending})")
+                            print_immediate(f"│  ├─ 🧠 Queued for semantic processing")
                     except Exception as e:
                         print_immediate(f"   ❌ Semantic chunking error for {url}: {e}")
         
         # Process PDF URLs if any were found
         if 'pdf_urls' in crawl_result and crawl_result['pdf_urls']:
             await self._process_pdf_urls(crawl_result['pdf_urls'], output_formats)
+        
+        # Check for completed semantic tasks
+        self._check_semantic_progress(processing_tree)
     
     async def _process_pdf_urls(self, pdf_urls: List[str], output_formats: List[str]) -> None:
         """
@@ -972,7 +1039,13 @@ class CrawlerOrchestrator:
                         if (self.is_contextual_chunking_enabled() and 
                             format_name.lower() in ['markdown', 'md']):
                             try:
-                                semantic_output_path = self.semantic_processor.get_semantic_output_path(saved_path)
+                                # Generate timestamped semantic output path using file manager
+                                import os
+                                semantic_filename = os.path.basename(saved_path).replace('.md', '.json')
+                                domain_folder = os.path.dirname(saved_path).split(os.sep)[-1]
+                                semantic_domain_dir = os.path.join(self.file_manager.current_semantic_dir, domain_folder)
+                                os.makedirs(semantic_domain_dir, exist_ok=True)
+                                semantic_output_path = os.path.join(semantic_domain_dir, semantic_filename)
                                 self.semantic_processor.add_task(saved_path, semantic_output_path, pdf_url)
                             except Exception as e:
                                 print(f"   ⚠️ Error launching semantic chunking for PDF {pdf_url}: {e}")

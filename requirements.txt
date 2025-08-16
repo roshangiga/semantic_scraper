@@ -4,7 +4,10 @@ beautifulsoup4
 PyYAML
 requests
 aiohttp
-google-generativeai
+google-genai
 openai
 python-dotenv
 rich
+spacy[transformers]
+joblib
+pydantic

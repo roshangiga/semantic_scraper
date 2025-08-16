@@ -48,7 +48,7 @@ crawler:
 
 # RAG (Retrieval-Augmented Generation) upload settings
 rag_upload:
-  enabled: true  # Set to true to enable automatic upload to RAG system
+  enabled: false  # Set to true to enable automatic upload to RAG system
   client: "ragflow"  # RAG client to use: ragflow | defy (more coming soon)
   streaming: true  # When enabled=true: true=real-time upload, false=batch upload at end
 
@@ -56,15 +56,19 @@ rag_upload:
 # Contextual chunking settings
 contextual_chunking:
   enabled: true
-  provider: "gemini"  # openai | azure | gemini
+  provider: "gemini"  # openai | azure | gemini | spacy
 
   # Models per provider
   openai_model: "gpt-4o-mini"
   gemini_model: "gemini-2.5-flash"
+  spacy_model: "en_core_web_trf"  # SpaCy transformer model for semantic chunking
 
   azure_endpoint: "https://scrapper-resource2025.cognitiveservices.azure.com/"
   azure_api_version: "2024-12-01-preview"
   azure_deployment: "gpt-5-mini"
+
+# Parallel processing settings
+semantic_workers: 1  # Number of parallel workers for semantic processing (default: 1)
 
 
 # Global HTML cleaning settings (applied to all domains)
@@ -228,3 +232,39 @@ domains:
 #      - "**/dstv/sports-guide**"
 #      - "**/new-world-sport-guide**"
 #      # Add more domain-specific URLs to exclude here
+
+
+# Cost tracking and pricing configuration
+cost_tracking:
+  enabled: true
+  output_file: "semantic_queue/cost_log.txt"
+  
+  # Pricing per 1M tokens in USD
+  pricing:
+    gemini:
+      gemini-2.5-flash:
+        free_tier:
+          input: 0.0
+          output: 0.0
+        paid_tier:
+          input: 0.30
+          output: 2.50
+    
+    openai:
+      gpt-4o-mini:
+        input: 0.15
+        output: 0.60
+      gpt-4o:
+        input: 2.50
+        output: 10.00
+      gpt-4-turbo:
+        input: 10.00
+        output: 30.00
+    
+    azure:
+      gpt-4o-mini:
+        input: 0.15
+        output: 0.60
+      gpt-4o:
+        input: 2.50
+        output: 10.00

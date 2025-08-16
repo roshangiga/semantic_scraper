@@ -45,7 +45,12 @@ class DocumentExtraction:
 Format the output as clean markdown with proper code (for eg text messages) and headers.
 
 DOCUMENT CONTENT:
+
+<document> 
+
 {document_content}
+
+</document> 
 
 FILE PATH: {file_path}
 TARGET MARKET: {target_market}

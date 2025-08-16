@@ -16,6 +16,7 @@ sys.path.insert(0, str(project_root))
 
 from src.semantic.providers.gemini_client import GeminiClient
 from src.semantic.providers.azure_client import OpenAIClient, AzureOpenAIClient
+from src.semantic.providers.spacy_client import SpacyClient
 
 
 def main():
@@ -24,7 +25,7 @@ def main():
     parser.add_argument('--input', required=True, help='Input markdown file path')
     parser.add_argument('--output', required=True, help='Output semantic chunks file path')
     parser.add_argument('--source-url', required=True, help='Source URL for the content')
-    parser.add_argument('--provider', default='gemini', choices=['gemini', 'openai', 'azure'], help='LLM provider to use')
+    parser.add_argument('--provider', default='gemini', choices=['gemini', 'openai', 'azure', 'spacy'], help='LLM provider to use')
     parser.add_argument('--model', help='Model name (defaults based on provider)')
     parser.add_argument('--azure-endpoint', help='Azure OpenAI endpoint URL')
     parser.add_argument('--azure-api-version', help='Azure OpenAI API version')
@@ -62,6 +63,10 @@ def main():
                 endpoint=args.azure_endpoint,
                 api_version=args.azure_api_version,
             )
+        elif provider == 'spacy':
+            # SpaCy doesn't need an API key
+            model_name = args.model or 'en_core_web_trf'
+            client = SpacyClient(model_name=model_name)
         else:
             # Default to Gemini
             api_key = os.getenv('GEMINI_API_KEY')

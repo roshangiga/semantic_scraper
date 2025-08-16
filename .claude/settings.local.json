@@ -12,7 +12,14 @@
       "Bash(dir:*)",
       "Bash(move:*)",
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:rich.readthedocs.io)"
+      "WebFetch(domain:rich.readthedocs.io)",
+      "Bash(timeout 30 python:*)",
+      "WebFetch(domain:joblib.readthedocs.io)",
+      "Bash(wmic process where \"name=''python.exe''\" call terminate)",
+      "Bash(sed:*)",
+      "Bash(timeout 15 python:*)",
+      "Bash(timeout 20 python:*)",
+      "Bash(grep:*)"
     ],
     "deny": []
   }

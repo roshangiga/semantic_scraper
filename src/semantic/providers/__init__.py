@@ -3,5 +3,6 @@
 from .base_client import BaseLLMClient
 from .azure_client import OpenAIClient, AzureOpenAIClient
 from .gemini_client import GeminiClient
+from .spacy_client import SpacyClient
 
-__all__ = ['BaseLLMClient', 'OpenAIClient', 'AzureOpenAIClient', 'GeminiClient']
+__all__ = ['BaseLLMClient', 'OpenAIClient', 'AzureOpenAIClient', 'GeminiClient', 'SpacyClient']

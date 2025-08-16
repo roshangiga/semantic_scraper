@@ -28,7 +28,7 @@ def setup_rich_logging():
 
 def print_success(message: str):
     """Print a success message with green styling."""
-    console.print(f"✅ {message}", style="bold bright_green")
+    console.print(f"[OK] {message}", style="bold bright_green")
 
 def print_error(message: str):
     """Print an error message with red styling."""
@@ -117,10 +117,11 @@ def create_page_processing_tree(page_num: int, queue_size: int, domain: str, url
     from rich.panel import Panel
     from rich.markup import escape
     
-    # Create main tree without redundant title
+    # Create main tree with minimal root
     tree = Tree(
-        "",  # No title needed - panel title is sufficient
-        guide_style="bright_blue"
+        label="",
+        guide_style="bright_blue",
+        hide_root=True
     )
     
     # Add static progress bar for queue status using simple rich components
@@ -138,9 +139,9 @@ def create_page_processing_tree(page_num: int, queue_size: int, domain: str, url
     empty_width = bar_width - filled_width
     
     # Create static progress bar using Rich components
-    progress_table = Table(show_header=False, box=None, padding=(0, 1))
+    progress_table = Table(show_header=False, box=None, padding=(0, 0), expand=False)
     progress_table.add_column(style="bold bright_magenta underline", width=18)  # Label
-    progress_table.add_column(min_width=25)  # Progress bar
+    progress_table.add_column(width=25)  # Progress bar
     progress_table.add_column(style="bold bright_white on blue", width=12)  # Stats
     
     # Create progress bar text
@@ -157,12 +158,6 @@ def create_page_processing_tree(page_num: int, queue_size: int, domain: str, url
     )
     
     tree.add(progress_table)
-    
-    # Add domain info with enhanced styling
-    domain_text = Text()
-    domain_text.append("🌐 Domain: ", style="bold bright_blue italic")
-    domain_text.append(domain, style="bold bright_white on blue underline")
-    tree.add(domain_text)
     
     # Add URL as simple text without panel
     if len(url) > 80:
@@ -194,6 +189,18 @@ def add_processing_step(tree: Tree, step_type: str, message: str, style: str = "
     elif step_type == "warning":
         step_text.append("⚠️", style="bold blink bright_yellow")
         step_text.append(" " + message, style="bold yellow on black")
+    elif step_type == "fallback_panel":
+        # Create panel for fallback processing warnings
+        from rich.panel import Panel
+        fallback_panel = Panel(
+            f"[bold bright_yellow]{message}[/bold bright_yellow]",
+            title="⚠️ Fallback Processing",
+            title_align="left",
+            style="bold yellow",
+            border_style="bright_yellow",
+            padding=(0, 1)
+        )
+        return tree.add(fallback_panel)
     elif step_type == "processing":
         step_text.append("🔄", style="bold bright_cyan")
         step_text.append(" " + message, style="italic cyan")
@@ -201,14 +208,91 @@ def add_processing_step(tree: Tree, step_type: str, message: str, style: str = "
         step_text.append("🧠", style="bold blink bright_magenta")
         step_text.append(" " + message, style="bold magenta on black underline")
     elif step_type == "semantic_panel":
-        # Create panel for semantic chunking messages
+        # Create panel for semantic chunking success
         from rich.panel import Panel
         semantic_panel = Panel(
             f"[bold bright_green]{message}[/bold bright_green]",
-            title="🧠 Semantic Processing",
+            title="✅ Semantic Completed",
             title_align="left",
-            style="bold magenta",
-            border_style="bright_magenta",
+            style="bold green",
+            border_style="bright_green",
+            padding=(0, 1)
+        )
+        return tree.add(semantic_panel)
+    elif step_type == "semantic_error_panel":
+        # Create panel for semantic chunking errors
+        from rich.panel import Panel
+        semantic_panel = Panel(
+            f"[bold red]{message}[/bold red]",
+            title="❌ Semantic Failed",
+            title_align="left",
+            style="bold red",
+            border_style="bright_red",
+            padding=(0, 1)
+        )
+        return tree.add(semantic_panel)
+    elif step_type == "semantic_progress_panel":
+        # Create panel for semantic queue progress
+        from rich.panel import Panel
+        from rich.table import Table
+        from rich.text import Text
+        
+        # Parse progress data from message (format: "completed,failed,total,filename")
+        try:
+            parts = message.split(',')
+            completed, failed, total = map(int, parts[:3])
+            filename = parts[3] if len(parts) > 3 else ""
+        except:
+            completed, failed, total = 0, 0, 0
+            filename = ""
+        
+        # Calculate progress
+        processed = completed + failed
+        progress_ratio = processed / total if total > 0 else 0
+        
+        # Create progress bar
+        bar_width = 20
+        filled_width = int(bar_width * progress_ratio)
+        empty_width = bar_width - filled_width
+        
+        # Create progress table
+        progress_table = Table(show_header=False, box=None, padding=(0, 0), expand=False)
+        progress_table.add_column(style="bold bright_cyan", width=16)  # Label
+        progress_table.add_column(width=25)  # Progress bar
+        progress_table.add_column(style="bold bright_white on blue", width=12)  # Stats
+        
+        # Create progress bar text
+        progress_bar_text = Text()
+        progress_bar_text.append("[", style="dim white")
+        progress_bar_text.append("█" * filled_width, style="bold bright_green")
+        progress_bar_text.append("░" * empty_width, style="dim white")
+        progress_bar_text.append("]", style="dim white")
+        
+        progress_table.add_row(
+            "📊 Queue:",
+            progress_bar_text,
+            f"{processed}/{total}"
+        )
+        
+        # Add completion/failure stats
+        stats_table = Table(show_header=False, box=None, padding=(0, 0), expand=False)
+        stats_table.add_column(style="bold green", width=16)
+        stats_table.add_column(style="bold red", width=16)
+        stats_table.add_row(
+            f"✅ Done: {completed}" if completed > 0 else "",
+            f"❌ Error: {failed}" if failed > 0 else ""
+        )
+        
+        # Create panel content without filename
+        from rich.console import Group
+        panel_content = Group(progress_table, stats_table)
+        
+        semantic_panel = Panel(
+            panel_content,
+            title="🧠 Queued for semantic processing",
+            title_align="left",
+            style="bold cyan",
+            border_style="bright_cyan",
             padding=(0, 1)
         )
         return tree.add(semantic_panel)
@@ -283,7 +367,7 @@ def add_processing_step(tree: Tree, step_type: str, message: str, style: str = "
     
     return tree.add(step_text)
 
-def print_processing_tree_final(tree: Tree, page_num: int):
+def print_processing_tree_final(tree: Tree, page_num: int, domain: str = "unknown"):
     """Print the final tree wrapped in a panel with enhanced styling."""
     from rich.text import Text
     from rich.panel import Panel
@@ -296,14 +380,16 @@ def print_processing_tree_final(tree: Tree, page_num: int):
     completion_text.append(f" Page {page_num} completed successfully!", style="bold bright_green on black underline")
     tree.add(completion_text)
     
-    # Wrap the entire tree in a panel
+    # Wrap the entire tree in a domain panel
+    from rich.panel import Panel
     tree_panel = Panel(
         tree,
-        title=f"[bold bright_cyan]📄 Page Processing Results[/bold bright_cyan]",
+        title=f"🌐 Domain: {domain}",
         title_align="left",
         style="bold blue",
         border_style="bright_blue",
-        padding=(0, 1)
+        padding=(0, 1),
+        expand=False
     )
     
     # Print the wrapped tree

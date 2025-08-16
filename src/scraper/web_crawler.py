@@ -479,13 +479,14 @@ class WebCrawler:
                                     parsed_href.netloc in configured_domains)
                     
                     if domain_allowed:
-                        self.visited_urls.add(href)
-                        
-                        # Check if this is a PDF URL
-                        if href.lower().endswith('.pdf'):
-                            pdf_urls.append(href)
-                        else:
-                            new_urls.append(href)
+                        # Only add to visited_urls when we actually crawl it, not when we discover it
+                        # This prevents duplicate queueing
+                        if href not in self.visited_urls:
+                            # Check if this is a PDF URL
+                            if href.lower().endswith('.pdf'):
+                                pdf_urls.append(href)
+                            else:
+                                new_urls.append(href)
         
         return {'pages': new_urls, 'pdfs': pdf_urls}
     
@@ -561,13 +562,38 @@ class WebCrawler:
     def save_checkpoint(self, visited_urls: set, crawl_queue: deque, semantic_queue: list = None):
         """Save crawling checkpoint to resume later."""
         import json
-        checkpoint = {
+        
+        # Read existing semantic stats from checkpoint if it exists
+        semantic_completed = 0
+        semantic_pending = 0
+        if os.path.exists('crawler_checkpoint.json'):
+            try:
+                with open('crawler_checkpoint.json', 'r', encoding='utf-8') as f:
+                    existing = json.load(f)
+                    semantic_completed = existing.get('semantic_completed', 0)
+                    semantic_pending = existing.get('semantic_pending', 0)
+            except:
+                pass
+        
+        # Load existing checkpoint to preserve all fields
+        existing_checkpoint = {}
+        try:
+            with open('crawler_checkpoint.json', 'r', encoding='utf-8') as f:
+                existing_checkpoint = json.load(f)
+        except:
+            pass
+        
+        # Update only the crawler-specific fields, preserve semantic worker fields
+        checkpoint = existing_checkpoint.copy()
+        checkpoint.update({
             'visited_urls': list(visited_urls),
             'crawl_queue': list(crawl_queue),
-            'semantic_queue': semantic_queue or []
-        }
+            'semantic_queue': semantic_queue or [],
+            'semantic_completed': semantic_completed,
+            'semantic_pending': semantic_pending
+        })
         with open('crawler_checkpoint.json', 'w', encoding='utf-8') as f:
-            json.dump(checkpoint, f)
+            json.dump(checkpoint, f, indent=2)
     
     def load_checkpoint(self):
         """Load crawling checkpoint if exists."""
@@ -616,12 +642,8 @@ class WebCrawler:
         max_pages = self.config.get('max_pages', 100)
         pages_crawled = 0
         
-        # Load checkpoint if exists
-        if hasattr(self, 'visited_urls'):
-            self.visited_urls, queue_from_checkpoint, semantic_queue_data = self.load_checkpoint()
-            if queue_from_checkpoint:
-                self.queue = queue_from_checkpoint
-            # Note: semantic_queue_data is handled by the orchestrator
+        # DON'T load checkpoint here - let orchestrator control this
+        # The orchestrator will set visited_urls and queue if resuming
         
         # Process queue with streaming
         while self.queue and pages_crawled < max_pages:
@@ -640,6 +662,9 @@ class WebCrawler:
             if self._is_problematic_url(url):
                 print(f"⚠️ Skipping problematic URL: {url}")
                 continue
+            
+            # Mark URL as visited NOW that we're actually crawling it
+            self.visited_urls.add(url)
             
             # Log crawling start through progress formatter
             if self.progress_formatter:
@@ -672,9 +697,8 @@ class WebCrawler:
                 else:
                     pass
                 
-                # Save checkpoint every N HTML pages
-                checkpoint_interval = self.config.get('save_checkpoint_every', 10)
-                if pages_crawled > 0 and pages_crawled % checkpoint_interval == 0:
+                # Save checkpoint every page
+                if pages_crawled > 0:
                     # Get semantic queue data from callback if available
                     semantic_queue = []
                     if self.semantic_queue_callback:
@@ -699,7 +723,10 @@ class WebCrawler:
                         if len(pdf_urls) > 3:
                             print(f"      ... and {len(pdf_urls) - 3} more")
                     
-                    self.queue.extend(new_urls)
+                    # Only add URLs that haven't been visited and aren't already in queue
+                    for url in new_urls:
+                        if url not in self.visited_urls and url not in self.queue:
+                            self.queue.append(url)
                     # Add PDF URLs to result for processing
                     result['pdf_urls'] = pdf_urls
                 
@@ -790,7 +817,10 @@ class WebCrawler:
                         if len(pdf_urls) > 3:
                             print(f"      ... and {len(pdf_urls) - 3} more")
                     
-                    self.queue.extend(new_urls)
+                    # Only add URLs that haven't been visited and aren't already in queue
+                    for url in new_urls:
+                        if url not in self.visited_urls and url not in self.queue:
+                            self.queue.append(url)
                     # Add PDF URLs to result for processing
                     result['pdf_urls'] = pdf_urls
             else:

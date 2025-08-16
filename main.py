@@ -7,6 +7,8 @@ import argparse
 import asyncio
 import sys
 import warnings
+import subprocess
+import os
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -57,6 +59,31 @@ except ImportError:
 
     def setup_rich_logging():
         pass
+
+
+def start_ragflow_console():
+    """Start the RAGFlow uploader console using exact same logic as semantic worker."""
+    try:
+        # Use EXACT same logic as semantic worker
+        ragflow_script = 'ragflow_uploader.py'
+        subprocess.Popen([
+            sys.executable, ragflow_script
+        ], creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0)
+        
+        print_info("🚀 RAGFlow Upload Console started in new console")
+        return True
+    except Exception as e:
+        print_warning(f"Could not start RAGFlow console: {e}")
+        return False
+
+
+def check_rag_config(orchestrator):
+    """Check if RAG upload is enabled and configured."""
+    try:
+        rag_config = orchestrator.config.get('rag_upload', {})
+        return rag_config.get('enabled', False)
+    except Exception:
+        return False
 
 
 def create_argument_parser():
@@ -286,6 +313,10 @@ async def main():
     if args.summary:
         orchestrator.print_config_summary()
         sys.exit(0)
+
+    # Start RAGFlow console if RAG upload is enabled
+    if check_rag_config(orchestrator) and not args.quiet and not args.validate and not args.summary:
+        start_ragflow_console()
 
     # Determine output formats
     output_formats = args.formats if args.formats else None

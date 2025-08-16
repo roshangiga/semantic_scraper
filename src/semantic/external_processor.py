@@ -171,10 +171,30 @@ class ExternalSemanticProcessor:
         self.completion_callback = callback
     
     def get_semantic_output_path(self, markdown_path: str) -> str:
-        """Generate semantic output path."""
+        """Generate semantic output path using configuration."""
         markdown_file = Path(markdown_path)
-        semantic_dir = Path("crawled_semantic")
-        semantic_dir.mkdir(exist_ok=True)
+        
+        # Get semantic output directory from config
+        file_manager_config = self.config.get('crawler', {}).get('file_manager', {})
+        semantic_output_dir = file_manager_config.get('semantic_output_dir', 'crawled_semantic')
+        
+        # Replace 'crawled_docling' with semantic output dir while maintaining the rest of the path structure
+        # Example: output/crawled_docling/20250816_132142/devices.myt.mu/file.md
+        # becomes: output/crawled_semantic/20250816_132142/devices.myt.mu/file.json
+        path_parts = markdown_file.parts
+        
+        # Find and replace crawled_docling with semantic directory
+        new_parts = []
+        for part in path_parts[:-1]:  # Exclude filename
+            if 'crawled_docling' in part:
+                # Replace the crawled_docling part with semantic output directory
+                new_parts.extend(Path(semantic_output_dir).parts)
+            else:
+                new_parts.append(part)
+        
+        semantic_dir = Path(*new_parts) if new_parts else Path(semantic_output_dir)
+        semantic_dir.mkdir(parents=True, exist_ok=True)
+        
         output_filename = markdown_file.stem + ".json"
         return str(semantic_dir / output_filename)
     

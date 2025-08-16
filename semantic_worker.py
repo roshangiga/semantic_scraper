@@ -14,8 +14,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 from rich.console import Console, Group
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn, TimeElapsedColumn
+from rich.progress import Progress, SpinnerColumn, BarColumn, MofNCompleteColumn, TextColumn, TimeElapsedColumn
+from rich.spinner import Spinner
 from rich.live import Live
+from rich.columns import Columns
 from rich.table import Table
 from rich.layout import Layout
 from rich import box
@@ -189,7 +191,7 @@ def process_task(task_data, cost_tracker=None):
 
                 # Log the usage (use free tier for gemini by default)
                 tier = "free_tier" if provider == "gemini" else "paid_tier"
-                print(f"[DEBUG] Tracking cost: provider={provider}, chunks={chunk_count}, input_len={len(input_text)}")
+                # Debug print removed
                 cost_tracker.log_usage(
                     provider=provider,
                     model=model_name,
@@ -201,7 +203,8 @@ def process_task(task_data, cost_tracker=None):
             except Exception as e:
                 print(f"Warning: Could not track costs: {e}")
         elif process.returncode == 0 and cost_tracker and cost_tracker.enabled:
-            print(f"[DEBUG] Cost tracking skipped: input_text={len(input_text) if input_text else 0} chars")
+            # Debug print removed
+            pass
 
         return {
             "success": process.returncode == 0,
@@ -234,122 +237,201 @@ def process_task(task_data, cost_tracker=None):
 
 def create_worker_layout(stats, current_processing="", queue_size=0, done_count=0, chunks_created=0, recent_logs=None, start_time=None, completed_tasks=None, pending_tasks=None, cost_tracker=None):
     """Create comprehensive worker layout with Rich components."""
-    if recent_logs is None:
-        recent_logs = []
     if completed_tasks is None:
         completed_tasks = []
     if pending_tasks is None:
         pending_tasks = []
 
-    # Combined progress bar and stats in same panel
+    # Progress bar — keep compact; show count right after bar
     progress = Progress(
         SpinnerColumn(),
-        TextColumn("[bold blue]📊 Processing Queue"),
+        TextColumn("[bold blue]Queue"),
+        # Fixed width bar so following column appears right after
         BarColumn(bar_width=30, style="blue", complete_style="green"),
         MofNCompleteColumn(),
-        TextColumn("•"),
-        TimeElapsedColumn(),
+        # No extra separators or elapsed time here to avoid spacing
         expand=False
     )
 
-    # Use stats total instead of calculating done_count + queue_size
     total_work = stats.get("total", done_count + queue_size)
     if total_work > 0:
         progress.add_task("queue", total=total_work, completed=done_count)
     else:
         progress.add_task("queue", total=1, completed=0)
 
-    # Stats line with cost information
+    # Stats line
     elapsed = time.time() - (start_time or time.time()) if start_time else 1
     completed_rate = f"{done_count/elapsed*60:.1f}/min" if elapsed > 0 and done_count > 0 else "0/min"
     chunk_rate = f"{chunks_created/elapsed*60:.1f}/min" if elapsed > 0 and chunks_created > 0 else "0/min"
 
-    # Format elapsed time
     hours = int(elapsed // 3600)
     minutes = int((elapsed % 3600) // 60)
     seconds = int(elapsed % 60)
-    if hours > 0:
-        elapsed_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-    else:
-        elapsed_str = f"{minutes:02d}:{seconds:02d}"
+    elapsed_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}" if hours > 0 else f"{minutes:02d}:{seconds:02d}"
 
-    # Get cost information
     cost_info = ""
+    total_cost = 0.0
+    total_calls = 0
     if cost_tracker and cost_tracker.enabled:
         costs = cost_tracker.get_total_costs()
         total_cost = costs.get('total_cost_usd', 0.0)
         total_calls = costs.get('total_entries', 0)
         if total_calls > 0 or total_cost > 0:
-            cost_info = f" • 💰 [yellow]${total_cost:.2f}[/yellow] USD ({total_calls} calls)"
+            cost_info = f" • 💰 [yellow]${total_cost:.2f}[/yellow] ({total_calls} calls)"
 
-    stats_line = f"⏱️ [cyan]{elapsed_str}[/cyan] • ✅ [green]{done_count}[/green] completed ({completed_rate}) • 🧩 [blue]{chunks_created}[/blue] chunks ({chunk_rate}) • ❌ [red]{stats.get('failed', 0)}[/red] failed{cost_info}"
+    # Stats line (single line including cost if available)
+    stats_line = (
+        f"[cyan]{elapsed_str}[/cyan]"
+        f" •[green] ✓ Success: {done_count}[/green] ({completed_rate})"
+        f" •[yellow] ⧉ Chunks: {chunks_created}[/yellow] ({chunk_rate})"
+        f" •[red] ✗ Errors: {stats.get('failed', 0)}[/red]"
+        f"{cost_info}"
+    )
 
-    # Combine progress and stats
-    progress_and_stats = Group(progress, "", stats_line)
+    # Header: progress on first line, stats (with cost) on second line
+    from rich.table import Table as RichTable
+    header_grid = RichTable.grid(expand=True)
+    header_grid.padding = (0, 0)
+    header_grid.add_column(ratio=1)
+    header_grid.add_row(progress)
+    # Blank spacer row between progress and stats for readability
+    header_grid.add_row("")
+    header_grid.add_row(stats_line)
+    # Blank spacer row below stats for readability
+    header_grid.add_row("")
+    header_content = header_grid
 
-    # Completed tasks table (left side) - show total count but display recent 10
-    total_completed = stats.get('completed', len(completed_tasks))
-    completed_table = Table(title=f"✅ Completed Tasks ({total_completed})", box=box.ROUNDED, header_style="bold green")
-    completed_table.add_column("File", style="white", min_width=20)
-    completed_table.add_column("Time", style="dim", min_width=8)
-    completed_table.add_column("Chunks", justify="right", style="blue", min_width=8)
-
-    # Show last 10 completed tasks
-    tasks_to_show = completed_tasks[-10:] if len(completed_tasks) > 10 else completed_tasks
-    for task in tasks_to_show:
-        completed_table.add_row(
-            task.get('name', 'Unknown'),
-            task.get('time', 'N/A'),
-            str(task.get('chunks', 0))
-        )
-
-    # If showing fewer than total, add a note
-    if len(completed_tasks) > 10:
-        completed_table.add_row(f"[dim]... and {len(completed_tasks) - 10} more[/dim]", "", "")
-
-    if not completed_tasks:
-        completed_table.add_row("[dim]No completed tasks yet[/dim]", "", "")
-
-    # Pending tasks table (right side)
+    # Tables
+    completed_count = stats.get('completed', len(completed_tasks))
     pending_count = queue_size + (1 if current_processing else 0)
-    pending_table = Table(title=f"📋 Pending Tasks ({pending_count})", box=box.ROUNDED, header_style="bold yellow")
-    pending_table.add_column("File", style="white", min_width=20)
-    pending_table.add_column("Added", style="dim", min_width=8)
-    pending_table.add_column("Status", style="cyan", min_width=12)
 
-    # Add currently processing file with spinner
+    # Completed table
+    # Use simpler borders for better compatibility across Windows terminals
+    comp_table = Table(show_header=True, box=box.SIMPLE_HEAVY)
+    # Tighten vertical space
+    comp_table.pad_edge = False
+    comp_table.padding = (0, 0)
+    comp_table.expand = True
+    comp_rows_count = 0
+    comp_table.add_column("File", style="white", min_width=18, overflow="ellipsis")
+    comp_table.add_column("Time", style="dim", min_width=4)
+    # Narrower chunks column
+    comp_table.add_column("Chunks", justify="right", min_width=1, no_wrap=True)
+
+    # Completed table: cap to 13 rows total, with overflow marker as last row (rightmost column)
+    total_completed_items = len(completed_tasks)
+    MAX_ROWS = 13
+    if total_completed_items > MAX_ROWS:
+        visible_count = MAX_ROWS - 1
+        overflow_count = total_completed_items - visible_count
+    else:
+        visible_count = total_completed_items
+        overflow_count = 0
+
+    # Show the most recent items (take from end)
+    show_tasks = completed_tasks[-visible_count:]
+
+    # De-duplicate completed tasks by a stable key (prefer task_id if present, else name+timestamp)
+    seen_completed = set()
+    for task in show_tasks:
+        key = task.get('task_id') or (task.get('name', 'Unknown'), task.get('timestamp', 0))
+        if key in seen_completed:
+            continue
+        seen_completed.add(key)
+        comp_table.add_row(task.get('name', 'Unknown'), task.get('time', 'N/A'), str(task.get('chunks', 0)))
+        comp_rows_count += 1
+
+    if overflow_count > 0:
+        # Place overflow marker in the File column per request
+        comp_table.add_row(f"[dim]+{overflow_count}[/dim]", "", "")
+        comp_rows_count += 1
+    if not completed_tasks:
+        comp_table.add_row("[dim]No completed tasks yet[/dim]", "", "")
+        comp_rows_count += 1
+
+    # Pending table
+    pend_table = Table(show_header=True, box=box.SIMPLE_HEAVY)
+    # Tighten vertical space
+    pend_table.pad_edge = False
+    pend_table.padding = (0, 0)
+    pend_table.expand = True
+    pend_rows_count = 0
+    # Put a narrow status icon column on the left (slightly wider to fit spinner frames)
+    pend_table.add_column(" ", style="cyan", min_width=1, no_wrap=True)
+    # Expand filename column with ellipsis overflow to prevent width expansion
+    pend_table.add_column("File", style="white", min_width=16, no_wrap=False, overflow="ellipsis")
+    pend_table.add_column("Time", style="dim", min_width=5, no_wrap=True)
+
+    # Track current processing by name for display filtering; we will also dedupe by task_id
+    spinner_added = False
     if current_processing:
-        spinner = "🔄"
-        pending_table.add_row(
-            f"[bold yellow]{current_processing}[/bold yellow]",
-            "now",
-            f"[bold yellow]{spinner} Processing...[/bold yellow]"
-        )
+        # Animated spinner in the leftmost column, then filename
+        pend_table.add_row(Spinner("dots", style="yellow"), f"[bold yellow]{current_processing}[/bold yellow]", "now")
+        pend_rows_count += 1
+        spinner_added = True
 
-    # Add other pending tasks
-    for task in pending_tasks[:15]:  # Show up to 15 pending tasks
-        if task.get('name') != current_processing:  # Don't duplicate current processing
-            pending_table.add_row(
-                task.get('name', 'Unknown'),
-                task.get('added_time', 'N/A'),
-                "[dim]Waiting...[/dim]"
-            )
+    # De-duplicate pending tasks; avoid showing the current processing entry again
+    seen_pending = set()
+    wait_list = []  # collected visible wait rows
+    total_wait_candidates = 0
+    for task in pending_tasks:
+        # Build a unique key: prefer task_id; fall back to (name, timestamp)
+        pkey = task.get('task_id') or (task.get('name', 'Unknown'), task.get('timestamp', 0))
+        if pkey in seen_pending:
+            continue
+        seen_pending.add(pkey)
+        if task.get('name') == current_processing:
+            # Skip duplicate of current processing item
+            continue
+        total_wait_candidates += 1
+        # Tentatively collect up to the capacity; we'll adjust for overflow below
+        wait_list.append((task.get('name', 'Unknown'), task.get('added_time', 'N/A')))
 
+    # Capacity logic: ensure TOTAL rows in pending (spinner + waits + overflow line if any) is <= 13
+    MAX_ROWS = 13
+    wait_capacity = MAX_ROWS - (1 if spinner_added else 0)
+    will_overflow = total_wait_candidates > wait_capacity
+    # If overflowing, reserve 1 row for the overflow marker
+    visible_wait_rows = wait_capacity if not will_overflow else max(wait_capacity - 1, 0)
+
+    # Render visible wait rows
+    for name, at_time in wait_list[:visible_wait_rows]:
+        pend_table.add_row("", name, at_time)
+        pend_rows_count += 1
+
+    # Add compact overflow marker in File column per request
+    if will_overflow:
+        overflow_count = total_wait_candidates - visible_wait_rows
+        pend_table.add_row("", f"[dim]+{overflow_count}[/dim]", "")
+        pend_rows_count += 1
+    
     if not pending_tasks and not current_processing:
-        pending_table.add_row("[dim]No pending tasks[/dim]", "", "")
+        pend_table.add_row("[dim]No pending tasks[/dim]", "", "")
+        pend_rows_count += 1
 
-    # Create simplified layout - just progress+stats and tasks
+    # Force side-by-side using Layout and tightly control height
     layout = Layout()
     layout.split_column(
-        Layout(Panel(progress_and_stats, title="[bold]📈 Progress & Statistics", border_style="blue"), size=7),
-        Layout(name="tasks", minimum_size=20)
+        Layout(header_content, size=4),
+        Layout(name="tables")
+    )
+    layout["tables"].split_row(
+        Layout(name="left", ratio=1),
+        Layout(name="right", ratio=1),
+    )
+    layout["tables"]["left"].update(
+        Panel(comp_table, title=f"Done ({completed_count})", border_style="green", padding=0, expand=True)
+    )
+    layout["tables"]["right"].update(
+        Panel(pend_table, title=f"Pending ({pending_count})", border_style="yellow", padding=0, expand=True)
     )
 
-    # Split tasks section into completed (left) and pending (right)
-    layout["tasks"].split_row(
-        Layout(Panel(completed_table, border_style="green")),
-        Layout(Panel(pending_table, border_style="yellow"))
-    )
+    # Dynamically size the tables area to remove excess empty space
+    # Add generous padding so the bottom overflow line is never clipped by panel borders or spacers
+    tables_size = max(comp_rows_count, pend_rows_count) + 6
+    if tables_size < 10:
+        tables_size = 10
+    layout["tables"].size = tables_size
 
     return layout
 
@@ -413,7 +495,7 @@ def worker_loop():
     """Main worker loop with comprehensive Rich live display."""
     # Show startup banner
     console.print(Panel.fit(
-        "[bold green]🧠 Semantic Worker Started[/bold green]\n[dim]Loading existing statistics...[/dim]",
+        "[bold green]🧠 Semantic Worker Started[/bold green]",
         border_style="green"
     ))
 
@@ -456,7 +538,8 @@ def worker_loop():
                             'name': filename,
                             'time': time_str,
                             'chunks': chunk_count,
-                            'timestamp': timestamp
+                            'timestamp': timestamp,
+                            'task_id': result.get('task_id')
                         })
                 except Exception:
                     continue
@@ -472,12 +555,15 @@ def worker_loop():
         print(f"Error loading completed tasks: {e}")
         completed_tasks = []
 
-    print(f"📊 Loaded stats: {stats['completed']} completed, {stats['failed']} failed, {stats['chunks_created']} chunks")
+    console.print(
+        f"[grey50] Loaded stats: {stats['completed']} completed, {stats['failed']} failed, {stats['chunks_created']} chunks[/]"
+    )
+    # Small padding below the stats line (requested)
+    console.print()
 
     # Initialize cost tracker
     try:
         cost_tracker = CostTracker()
-        print(f"Cost tracker initialized: enabled={cost_tracker.enabled}")
     except Exception as e:
         print(f"Warning: Could not initialize cost tracker: {e}")
         cost_tracker = None
@@ -507,57 +593,14 @@ def worker_loop():
                     tasks.append({
                         'name': filename,
                         'added_time': added_time,
-                        'timestamp': timestamp
+                        'timestamp': timestamp,
+                        'task_id': task_data.get('task_id')
                     })
                 except Exception:
                     continue
 
             # Sort by timestamp (oldest first)
             return sorted(tasks, key=lambda x: x.get('timestamp', 0))
-        except Exception:
-            return []
-
-    def get_completed_tasks_from_results():
-        """Get completed task list by scanning result files."""
-        completed_tasks = []
-        try:
-            if not RESULT_DIR.exists():
-                return completed_tasks
-
-            for result_file in RESULT_DIR.glob("*.json"):
-                try:
-                    if not result_file.exists() or not result_file.is_file():
-                        continue
-
-                    with open(result_file, 'r', encoding='utf-8') as f:
-                        result = json.load(f)
-
-                    if result.get('success', False):
-                        # Extract filename and time from result
-                        source_file = result.get('source_file', '')
-                        filename = os.path.basename(source_file) if source_file else 'Unknown'
-                        chunk_count = result.get('chunk_count', 0)
-
-                        # Use file modification time as completion time
-                        try:
-                            mtime = result_file.stat().st_mtime
-                            time_str = time.strftime("%H:%M:%S", time.localtime(mtime))
-                            timestamp = mtime
-                        except Exception:
-                            time_str = "N/A"
-                            timestamp = 0
-
-                        completed_tasks.append({
-                            'name': filename,
-                            'time': time_str,
-                            'chunks': chunk_count,
-                            'timestamp': timestamp
-                        })
-                except Exception:
-                    continue
-
-            # Sort by completion time (newest first, like checkpoint did)
-            return sorted(completed_tasks, key=lambda x: x.get('timestamp', 0), reverse=True)
         except Exception:
             return []
 
@@ -582,7 +625,8 @@ def worker_loop():
         initial_layout,
         console=console,
         refresh_per_second=3,
-        screen=True
+        # Render in-place to improve compatibility with terminals that handle alt-screen poorly
+        screen=False
     ) as live:
 
         while True:

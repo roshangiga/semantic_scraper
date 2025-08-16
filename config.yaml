@@ -31,11 +31,11 @@ crawler:
   # File management settings
   file_manager:
     delete_existing_folders: true
-    html_output_dir: "crawled_html"
-    pages_output_dir: "crawled_docling"
-    pdf_output_dir: "crawled_pdf"
-    semantic_output_dir: "crawled_semantic"  # Directory for contextual chunks
-    report_output_dir: "crawled_report"  # Directory for crawl reports
+    html_output_dir: "output/crawled_html"
+    pages_output_dir: "output/crawled_docling"
+    pdf_output_dir: "output/crawled_pdf"
+    semantic_output_dir: "output/crawled_semantic"  # Directory for contextual chunks
+    report_output_dir: "output/crawled_report"  # Directory for crawl reports
     filename_template: "{sanitized_url}"
     use_domain_subfolders: true  # Create subdirectories for each domain
     files_rotate: 3  # Maximum number of timestamped folders to keep before deleting oldest
@@ -48,9 +48,10 @@ crawler:
 
 # RAG (Retrieval-Augmented Generation) upload settings
 rag_upload:
-  enabled: false  # Set to true to enable automatic upload to RAG system
+  enabled: true  # Set to true to enable automatic upload to RAG system
   client: "ragflow"  # RAG client to use: ragflow | defy (more coming soon)
-  streaming: true  # When enabled=true: true=real-time upload, false=batch upload at end
+  streaming: false  # When enabled=true: true=real-time upload, false=batch upload at end
+  source: "output/crawled_semantic"  # Path to read from
 
 
 # Contextual chunking settings

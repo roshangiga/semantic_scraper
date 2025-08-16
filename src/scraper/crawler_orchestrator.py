@@ -394,7 +394,6 @@ class CrawlerOrchestrator:
             
             if page_count == 0:
                 print("⚠️  No pages were successfully crawled")
-                return results
         
         # Get final statistics
         results['stats'] = self.file_manager.get_output_stats()

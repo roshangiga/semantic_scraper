@@ -13,6 +13,9 @@ from rich.table import Table
 from rich.syntax import Syntax
 from rich.highlighter import ReprHighlighter
 from rich.tree import Tree
+from rich import box
+from rich.console import Group
+from rich.rule import Rule
 import logging
 
 # Create a global console instance with highlighting
@@ -22,10 +25,8 @@ console = Console(highlighter=ReprHighlighter())
 _page_live: Live | None = None
 _current_domain: str = "unknown"
 _current_queue_line: str = ""
+_last_queue_counts: tuple[int, int] | None = None
 _current_sem_queue_line: str = ""
-_upcoming_urls: list[str] = []
-_upcoming_remaining: int = 0
-_last_tree: Tree | None = None
 # Track the current URL for the header; ensure it always exists
 _current_url: str = ""
 
@@ -44,22 +45,23 @@ def _render_page_panel(tree: Tree, domain: str):
     from rich.padding import Padding
     from datetime import datetime
 
-    # Optional queue lines above the domain header (no panel)
+    # Optional queue lines above the domain header, wrapped in a subtle panel
     from rich.text import Text as _Text
     from rich.console import Group as _Group
+    from rich.padding import Padding as _Padding
     queue_items = []
     if _current_queue_line:
         queue_items.append(_Text(_current_queue_line, style="white"))
     if _current_sem_queue_line:
         queue_items.append(_Text(_current_sem_queue_line, style="white"))
-    queue_renderable = _Group(*queue_items) if queue_items else _Text("")
-    # Add a bit of horizontal padding to the queue region as requested
-    from rich.padding import Padding as _Padding
-    queue_renderable = _Padding(queue_renderable, (0, 1, 0, 1))
-    # Wrap queue region inside a subtle panel (no header)
     if queue_items:
-        from rich.panel import Panel as _Panel
-        queue_renderable = _Panel(queue_renderable, border_style="grey50", padding=(0,1))
+        queue_group = _Group(*queue_items)
+        queue_padded = _Padding(queue_group, (0, 1, 0, 1))
+        queue_renderable = Panel(queue_padded, border_style="grey50", padding=(0,1))
+    else:
+        queue_renderable = _Text("")
+
+
 
     # Header: left = animated spinner (Rich Spinner) + current URL (not domain), right = live clock
     header_table = Table.grid(expand=True)
@@ -135,17 +137,14 @@ def _render_page_panel(tree: Tree, domain: str):
     if _urls:
         # Estimate a conservative width for right column text
         try:
-            # Use slightly wider estimate for the right panel and remove extra subtraction
             max_chars = max(20, int(console.size.width * 0.48))
         except Exception:
             max_chars = 60
         from rich.spinner import Spinner as _Spinner
         from rich.table import Table as __Table
         for idx, url in enumerate(_urls):
-            # No bullets; tighter vertical spacing (no extra blank rows)
             shortened = _ellipsize_left(str(url), max_chars)
             if idx == 0:
-                # Top item shows an animated spinner on the left
                 row = __Table.grid(padding=(0,0))
                 row.add_column(width=2, no_wrap=True)
                 row.add_column(ratio=1)
@@ -181,19 +180,18 @@ def _render_page_panel(tree: Tree, domain: str):
 
     return layout
 
-def update_upcoming_urls(urls: list[str], remaining_count: int = 0):
-    """Update the upcoming URLs list shown on the right-hand side and refresh the live view.
-
-    Args:
-        urls: A small window of upcoming URLs to display (e.g., next 5-10 items)
-        remaining_count: Additional queued items not shown in the list
-    """
-    global _upcoming_urls, _upcoming_remaining, _page_live, _current_domain, _last_tree
-    _upcoming_urls = list(urls) if urls else []
-    _upcoming_remaining = int(remaining_count) if remaining_count else 0
-    if _page_live is not None and _last_tree is not None:
-        panel = _render_page_panel(_last_tree, _current_domain)
-        _page_live.update(panel, refresh=True)
+def print_app_title():
+    """Print the application title at the very top."""
+    from rich.align import Align
+    title_text = Text("🚀 Craw4AI Docling - Web Crawler", style="bold bright_white")
+    title_panel = Panel(
+        Align.center(title_text),
+        box=box.DOUBLE,
+        border_style="bright_magenta",
+        padding=(1, 2)
+    )
+    console.print(title_panel)
+    console.print()  # Add some space
 
 def setup_rich_logging():
     """Setup rich logging handler for beautiful logs."""
@@ -248,13 +246,22 @@ def print_rag_upload(message: str):
     console.print(f"📤 {message}", style="bold cyan")
 
 def print_panel(title: str, content: str, style: str = "blue"):
-    """Print content in a styled panel."""
-    console.print(Panel(content, title=title, style=style))
+    """Print content in a compact, panel-like block without heavy borders."""
+    # Title line
+    title_text = Text(title, style=f"bold {style}")
+    # Support rich markup in content
+    try:
+        content_text = Text.from_markup(content)
+    except Exception:
+        content_text = Text(str(content))
+    block = Group(title_text, content_text)
+    # Use a subtle rule separator above for clarity
+    console.print(block)
 
 def print_header(title: str):
-    """Print a styled header."""
-    text = Text(title, style="bold magenta")
-    console.print(Panel(text, style="magenta"))
+    """Print a compact header without a surrounding panel."""
+    console.print(Text(title, style="bold magenta"))
+    console.print(Rule(style="grey23"))
 
 def create_progress():
     """Create a rich progress bar."""
@@ -267,13 +274,16 @@ def create_progress():
     )
 
 def create_table(title: str = None, style: str = "bright_blue") -> Table:
-    """Create a styled table with enhanced colors."""
+    """Create a compact table with minimal borders for cleaner UX."""
     table = Table(
-        title=title, 
-        show_header=True, 
+        title=title,
+        show_header=True,
         header_style="bold bright_magenta",
-        border_style=style,
-        title_style="bold bright_white"
+        title_style="bold bright_white",
+        box=box.SIMPLE,
+        show_lines=False,
+        expand=True,
+        pad_edge=False
     )
     return table
 

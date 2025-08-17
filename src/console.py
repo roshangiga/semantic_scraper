@@ -132,7 +132,8 @@ def create_table(title: str = None, style: str = "bright_blue") -> Table:
         box=box.SIMPLE,
         show_lines=False,
         expand=True,
-        pad_edge=False
+        pad_edge=False,
+        padding=(0, 0)
     )
     return table
 

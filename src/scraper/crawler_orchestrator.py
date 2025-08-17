@@ -312,7 +312,6 @@ class CrawlerOrchestrator:
         
         # Get domain names for display
         domain_names = [d['domain'] for d in domains]
-        print_processing(f"Starting crawl of {len(domain_names)} domains with max {max_pages} pages total")
         
         # Display crawl settings in table
         self._display_crawl_settings(crawl_config)
@@ -678,37 +677,8 @@ class CrawlerOrchestrator:
         if not RICH_AVAILABLE:
             return
             
-        # Get file manager config
-        file_config = self.config.get('crawler', {}).get('file_manager', {})
-        
-        # Create timestamp for display
-        from datetime import datetime
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Create directory setup table
-        table = create_table("📁 Directory Setup")
-        table.add_column("Type", style="cyan", width=15)
-        table.add_column("Directory Path", style="bright_blue", width=40)
-        table.add_column("Status", style="green", width=12)
-        
-        # Add directory rows
-        html_dir = file_config.get('html_output_dir', 'crawled_html')
-        pages_dir = file_config.get('pages_output_dir', 'crawled_docling')
-        pdf_dir = file_config.get('pdf_output_dir', 'crawled_pdf')
-        semantic_dir = file_config.get('semantic_output_dir', 'crawled_semantic')
-        
-        use_subfolders = file_config.get('use_domain_subfolders', True)
-        timestamp_display = f"\\{timestamp}" if use_subfolders else ""
-        
-        table.add_row("🌐 HTML", f"{html_dir}{timestamp_display}", "✅ Ready")
-        table.add_row("📄 Pages", f"{pages_dir}{timestamp_display}", "✅ Ready") 
-        table.add_row("📑 PDF", f"{pdf_dir}{timestamp_display}", "✅ Ready")
-        
-        # Only show semantic if enabled
-        if self.is_contextual_chunking_enabled():
-            table.add_row("🧠 Semantic", f"{semantic_dir}{timestamp_display}", "✅ Ready")
-            
-        console.print(table)
+        # Merged into startup config table; keep this as no-op to avoid duplicate UI
+        return
     
     def _display_crawl_settings(self, crawl_config: Dict[str, Any]) -> None:
         """Display crawl configuration settings in a table."""
@@ -722,84 +692,52 @@ class CrawlerOrchestrator:
             print(f"⏰ Retry delay: {crawl_config.get('retry_delay', 5)}s")
             print("-" * 60)
             return
-            
-        # Create crawl settings table
-        table = create_table("⚙️ Crawl Configuration")
-        table.add_column("Setting", style="cyan", width=25)
-        table.add_column("Value", style="bright_magenta", width=15)
-        table.add_column("Description", style="dim white", width=30)
         
-        # Add configuration rows with colors
-        table.add_row(
-            "📊 Max pages per domain", 
-            str(crawl_config.get('max_pages', 100)),
-            "Maximum pages to crawl per domain"
-        )
-        table.add_row(
-            "⏱️ HTML capture delay", 
-            f"{crawl_config.get('delay_before_return_html', 2.5)}s",
-            "Wait time for JavaScript execution"
-        )
-        table.add_row(
-            "🔄 Bypass cache", 
-            str(crawl_config.get('bypass_cache', True)),
-            "Force fresh page loads"
-        )
-        table.add_row(
-            "🚫 Exclude sections", 
-            str(crawl_config.get('exclude_section_urls', True)),
-            "Skip URLs with # fragments"
-        )
-        table.add_row(
-            "🔁 Max retries", 
-            str(crawl_config.get('max_retries', 3)),
-            "Retry attempts for failed pages"
-        )
-        table.add_row(
-            "⏰ Retry delay", 
-            f"{crawl_config.get('retry_delay', 5)}s",
-            "Wait time between retry attempts"
-        )
-        
-        console.print(table)
-        print()  # Add spacing after table
+        # Rich UI is merged in Configuration Summary; suppress duplicate output
+        return
     
     def _display_startup_config(self, output_formats: List[str]) -> None:
         """Display configuration information before starting crawl."""
         if not RICH_AVAILABLE:
-            # Fallback to old style
-            print("\n" + "=" * 60)
-            print("🔧 CRAWLER CONFIGURATION")
-            print("=" * 60)
-            print(f"📄 Output formats: {', '.join(output_formats)}")
-            print("=" * 60)
+            # Suppress verbose banner in non-rich mode
             return
-            
-        print_header("🔧 Crawler Configuration")
+            # Suppress standalone header to keep UI concise
         
-        # Basic settings table
+        # Build a single consolidated table
         file_config = self.config.get('crawler', {}).get('file_manager', {})
-        
-        table = create_table("Basic Settings")
-        table.add_column("Setting", style="cyan", width=25)
-        table.add_column("Value", style="bright_blue", width=35)
-        
-        table.add_row("📄 Output formats", ', '.join(output_formats))
-        table.add_row("📁 HTML directory", file_config.get('html_output_dir', 'crawled_html'))
-        table.add_row("📁 Pages directory", file_config.get('pages_output_dir', 'crawled_docling'))
-        table.add_row("📂 Use domain subfolders", str(file_config.get('use_domain_subfolders', True)))
-        table.add_row("🗑️ Delete existing folders", str(file_config.get('delete_existing_folders', False)))
-        
-        console.print(table)
-        
-        # Domains table
         domains = self.get_domains_config()
-        if RICH_AVAILABLE and domains:
-            table = create_table("🌐 Configured Domains")
-            table.add_column("Domain", style="cyan")
-            table.add_column("URLs", justify="right", style="magenta")
-            table.add_column("Features", style="green")
-            
+        markdown_processing = self.config.get('markdown_processing', {})
+        rag_config = self.config.get('rag_upload', {})
+        crawl_config = self.get_crawl4ai_config()
+        
+        table = create_table("Configuration Summary")
+        table.add_column("Item", style="cyan", width=28, no_wrap=True, overflow="ellipsis")
+        table.add_column("Value", style="bright_blue", width=40, no_wrap=True, overflow="ellipsis")
+        table.add_column("Details", style="dim white", no_wrap=True, overflow="ellipsis")
+        
+        # Basic settings
+        table.add_row("📄 Output formats", ', '.join(output_formats), "")
+        table.add_row("📂 Use domain subfolders", str(file_config.get('use_domain_subfolders', True)), "")
+        table.add_row("🗑️ Delete existing folders", str(file_config.get('delete_existing_folders', False)), "")
+        
+        # Directory setup (merged)
+        from datetime import datetime as _dt
+        _ts = _dt.now().strftime("%Y%m%d_%H%M%S")
+        html_dir = file_config.get('html_output_dir', 'crawled_html')
+        pages_dir = file_config.get('pages_output_dir', 'crawled_docling')
+        pdf_dir = file_config.get('pdf_output_dir', 'crawled_pdf')
+        semantic_dir = file_config.get('semantic_output_dir', 'crawled_semantic')
+        use_subfolders = file_config.get('use_domain_subfolders', True)
+        ts_suffix = f"\\{_ts}" if use_subfolders else ""
+        table.add_row("📁 HTML directory", f"{html_dir}{ts_suffix}", "✅ Ready")
+        table.add_row("📁 Pages directory", f"{pages_dir}{ts_suffix}", "✅ Ready")
+        table.add_row("📑 PDF directory", f"{pdf_dir}{ts_suffix}", "✅ Ready")
+        if self.is_contextual_chunking_enabled():
+            table.add_row("🧠 Semantic directory", f"{semantic_dir}{ts_suffix}", "✅ Ready")
+        
+        # Configured domains (merged)
+        if domains:
+            table.add_row("🌐 Domains configured", str(len(domains)), "")
             for domain in domains:
                 features = []
                 if domain.get('js_code'):
@@ -808,51 +746,34 @@ class CrawlerOrchestrator:
                     features.append("⏳ Wait condition")
                 if domain.get('html_classes_to_only_include'):
                     features.append("🎯 Filtered content")
-                
                 table.add_row(
-                    domain['domain'],
-                    str(len(domain.get('start_urls', []))),
+                    f"  └ {domain['domain']}",
+                    f"{len(domain.get('start_urls', []))} URLs",
                     ", ".join(features) if features else "Standard"
                 )
-            console.print(table)
         
-        # HTML Cleaning settings
-        html_cleaning = self.config.get('html_cleaning', {})
-        if html_cleaning:
-            cleaning_info = f"""🔍 Remove CSS hidden: {html_cleaning.get('remove_css_hidden_elements', True)}
-🏷️  Remove elements: {len(html_cleaning.get('html_elements_to_remove', []))}
-🎨 Remove classes: {len(html_cleaning.get('html_classes_to_remove', []))}
-💬 Remove comments: {len(html_cleaning.get('comment_blocks_to_remove', []))}"""
-            print_panel("🧹 HTML Cleaning", cleaning_info, "yellow")
+        # Requested options in single table
+        table.add_row("🔄 Remove duplicate lines", "True", "always enabled")
+        table.add_row("📑 Remove duplicate files", str(markdown_processing.get('remove_duplicate_files', False)), "")
+        table.add_row("📄 Remove blank files", str(markdown_processing.get('remove_blank_files', False)), "")
         
-        # Markdown processing
-        markdown_processing = self.config.get('markdown_processing', {})
-        if markdown_processing:
-            sections_to_ignore = markdown_processing.get('sections_to_ignore', [])
-            sections_info = ""
-            if sections_to_ignore:
-                sections_info += f"🚫 Ignore sections: {len(sections_to_ignore)}\n"
-                for section in sections_to_ignore[:3]:
-                    sections_info += f"   • \"{section}\"\n"
-                if len(sections_to_ignore) > 3:
-                    sections_info += f"   ... and {len(sections_to_ignore) - 3} more\n"
-            
-            sections_info += f"🔄 Remove duplicate lines: True (always enabled)\n"
-            sections_info += f"📑 Remove duplicate files: {markdown_processing.get('remove_duplicate_files', False)}\n"
-            sections_info += f"📄 Remove blank files: {markdown_processing.get('remove_blank_files', False)}"
-            
-            print_panel("📝 Markdown Processing", sections_info, "green")
-        
-        # RAG upload
+        # RAG upload status
         if self.rag_uploader and self.rag_uploader.is_enabled():
-            rag_config = self.config.get('rag_upload', {})
-            streaming_mode = "Real-time" if rag_config.get('streaming', True) else "Batch"
-            rag_info = f"""🔌 Client: {rag_config.get('client', 'ragflow').upper()}
-🏷️  Naming: timestamp_domain format
-🚀 Mode: {streaming_mode}"""
-            print_panel("📤 RAG Upload: Enabled", rag_info, "cyan")
+            mode = "Real-time" if rag_config.get('streaming', True) else "Batch"
+            client = rag_config.get('client', 'ragflow').upper()
+            table.add_row("📤 RAG Upload", "Enabled", f"{client} • {mode}")
         else:
-            print_panel("📤 RAG Upload", "Disabled", "red")
+            table.add_row("📤 RAG Upload", "Disabled", "")
+
+        # Crawl configuration (merged)
+        table.add_row("⚙️ Crawl: max pages per domain", str(crawl_config.get('max_pages', 100)), "")
+        table.add_row("⚙️ Crawl: HTML capture delay", f"{crawl_config.get('delay_before_return_html', 2.5)}s", "JS settle time")
+        table.add_row("⚙️ Crawl: bypass cache", str(crawl_config.get('bypass_cache', True)), "")
+        table.add_row("⚙️ Crawl: exclude sections (#)", str(crawl_config.get('exclude_section_urls', True)), "")
+        table.add_row("⚙️ Crawl: max retries", str(crawl_config.get('max_retries', 3)), "")
+        table.add_row("⚙️ Crawl: retry delay", f"{crawl_config.get('retry_delay', 5)}s", "")
+        
+        console.print(table)
     
     async def _process_single_page(self, crawl_result: Dict[str, Any], output_formats: List[str], processing_tree = None) -> None:
         """

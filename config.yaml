@@ -48,7 +48,7 @@ crawler:
 
 # RAG (Retrieval-Augmented Generation) upload settings
 rag_upload:
-  enabled: true  # Set to true to enable automatic upload to RAG system
+  enabled: false  # Set to true to enable automatic upload to RAG system
   client: "ragflow"  # RAG client to use: ragflow | defy (more coming soon)
   streaming: false  # When enabled=true: true=real-time upload, false=batch upload at end
   source: "output/crawled_semantic"  # Path to read from
@@ -56,7 +56,7 @@ rag_upload:
 
 # Contextual chunking settings
 contextual_chunking:
-  enabled: true
+  enabled: false
   provider: "gemini"  # openai | azure | gemini | spacy
 
   # Models per provider

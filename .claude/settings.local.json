@@ -19,7 +19,9 @@
       "Bash(sed:*)",
       "Bash(timeout 15 python:*)",
       "Bash(timeout 20 python:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(cp:*)",
+      "Bash(del test_emoji_spacing.py unicode_analysis.py)"
     ],
     "deny": []
   }

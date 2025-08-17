@@ -33,6 +33,8 @@ class FileManager:
         self.delete_existing_folders = config.get('delete_existing_folders', False)
         self.use_domain_subfolders = config.get('use_domain_subfolders', True)
         self.files_rotate = config.get('files_rotate', 5)
+        # Quiet internal logs by default
+        self.quiet_logs = config.get('quiet_logs', True)
         
         # Create timestamp for this crawl session (or reuse existing one for recovery)
         self.timestamp = self._get_or_create_timestamp()
@@ -63,17 +65,19 @@ class FileManager:
                     latest_timestamp = timestamp_dirs[-1]
                     # Only reuse if checkpoint exists (indicates we're resuming)
                     if os.path.exists('crawler_checkpoint.json'):
-                        print(f"[RESUME] Reusing existing timestamp: {latest_timestamp}")
+                        self._log(f"[RESUME] Reusing existing timestamp: {latest_timestamp}")
                         return latest_timestamp
         
         # No checkpoint or starting fresh - create new timestamp
         new_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        print(f"[NEW] Created new timestamp: {new_timestamp}")
+        self._log(f"[NEW] Created new timestamp: {new_timestamp}")
         return new_timestamp
     
     def _log(self, msg: str) -> None:
         """Log via progress formatter if available, else print.
         """
+        if self.quiet_logs:
+            return
         print(msg)
     
     def _setup_timestamped_dirs(self) -> None:

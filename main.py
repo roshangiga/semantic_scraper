@@ -29,7 +29,7 @@ try:
     from src.console import (
         console, print_success, print_error, print_warning,
         print_info, print_processing, print_panel, print_header,
-        setup_rich_logging, create_table
+        setup_rich_logging, create_table, print_app_title
     )
     RICH_AVAILABLE = True
 except ImportError:
@@ -59,6 +59,10 @@ except ImportError:
 
     def setup_rich_logging():
         pass
+
+    def print_app_title():
+        # Fallback to simple header if rich is unavailable
+        print_header("🚀 Craw4AI Docling - Web Crawler")
 
 
 def start_ragflow_console():
@@ -274,7 +278,8 @@ async def main():
 
     # Show header (unless in quiet mode or just validating/showing summary)
     if not args.quiet and not args.validate and not args.summary:
-        print_header("🚀 Craw4AI Docling - Web Crawler")
+        # Use double panel title for enhanced UI
+        print_app_title()
 
     # Validate configuration file
     if not validate_config_file(args.config):
@@ -331,7 +336,8 @@ async def main():
         else:
             # Crawl all domains
             if not args.quiet:
-                print_processing("Crawling all configured domains...")
+                # Suppress verbose startup line
+                pass
             results = await orchestrator.crawl_and_convert(output_formats)
 
         # Handle errors

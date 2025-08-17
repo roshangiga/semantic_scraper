@@ -126,7 +126,7 @@ def create_table(title: str = None, style: str = "bright_blue") -> Table:
     """Create a compact table with minimal borders for cleaner UX."""
     table = Table(
         title=title,
-        show_header=True,
+        show_header=False,
         header_style="bold bright_magenta",
         title_style="bold bright_white",
         box=box.SIMPLE,
@@ -170,33 +170,82 @@ def _get_checkpoint_counts():
     except Exception:
         return 0, 0
 
+def _create_checkpoint_status():
+    """Create checkpoint status display."""
+    try:
+        import json
+        with open('crawler_checkpoint.json', 'r', encoding='utf-8') as f:
+            cp = json.load(f)
+        
+        visited = cp.get('visited_urls', []) or []
+        visited_count = len(visited) if isinstance(visited, list) else (visited if isinstance(visited, int) else 0)
+        
+        # Check for semantic tasks (this is a placeholder - adjust based on actual semantic task tracking)
+        semantic_tasks = 0  # You may need to adjust this based on how semantic tasks are tracked
+        
+        status_text = Text()
+        status_text.append("📥 ", style="dim")
+        status_text.append(f"Loaded checkpoint with {visited_count} visited URLs, {semantic_tasks} semantic tasks", style="dim")
+        
+        return status_text
+    except Exception:
+        return Text("📥 No checkpoint found", style="dim")
+
 def _create_queue_progress():
     """Create the queue progress display."""
     processed, remaining = _get_checkpoint_counts()
     total = processed + remaining
     
     if total == 0:
-        return Text("")
+        # Return empty panel to maintain layout
+        empty_table = Table(show_header=False, box=None, expand=True, padding=(0, 1))
+        empty_table.add_column()
+        empty_table.add_row(Text("No queue data", style="dim"))
+        return Panel(empty_table, box=box.ROUNDED, border_style="dim", padding=(0, 1))
     
-    # Create wider progress bar
-    bar_width = 80
+    # Create progress bar table (1 row x 3 columns)
+    progress_table = Table(
+        show_header=False,
+        box=None,
+        expand=True,
+        padding=(0, 1)
+    )
+    progress_table.add_column(width=20)  # Label column
+    progress_table.add_column(ratio=1)   # Progress bar column
+    progress_table.add_column(justify="right", width=12)  # Count column
+    
+    # Calculate available width dynamically (console width - label - count - padding)
+    try:
+        total_width = console.size.width
+        # Account for label (20) + count (12) + borders/padding (~10)
+        available_width = max(20, total_width - 20 - 12 - 10)
+    except:
+        available_width = 50
+    
+    # Create progress bar to fill available space
+    bar_width = available_width - 2  # Subtract 2 for brackets
     progress_ratio = processed / total
     filled_width = int(bar_width * progress_ratio)
     empty_width = bar_width - filled_width
     
-    # Build progress text with fixed spacing for right alignment
+    # Label text
+    label_text = Text("📊 Queue Progress", style="bold bright_magenta")
+    
+    # Progress bar text that fills the column
     progress_text = Text()
-    progress_text.append("📊 Queue Progress: ", style="bold bright_magenta")
     progress_text.append("[", style="dim white")
     progress_text.append("█" * filled_width, style="bold bright_green")
     progress_text.append("░" * empty_width, style="dim white")
     progress_text.append("]", style="dim white")
     
-    # Add fixed spacing and counter
-    progress_text.append("  ")  # Small gap after progress bar
-    progress_text.append(f"{processed}/{total}", style="dim bright_white")
+    # Count text
+    count_text = Text(f"{processed}/{total}", style="dim bright_white")
     
-    return progress_text
+    # Add row to table
+    progress_table.add_row(label_text, progress_text, count_text)
+    
+    # Wrap in a panel with rounded top corners
+    return Panel(progress_table, box=box.ROUNDED, border_style="bright_blue", padding=(0, 1))
 
 def _create_upcoming_urls():
     """Create the upcoming URLs panel."""
@@ -205,7 +254,7 @@ def _create_upcoming_urls():
         with open('crawler_checkpoint.json', 'r', encoding='utf-8') as f:
             cp = json.load(f)
         queue = cp.get('crawl_queue', []) or []
-        urls = queue[:19]  # Show 19 URLs
+        urls = queue[:16]  # Show 16 URLs
         remaining = max(0, len(queue) - len(urls))
     except Exception:
         urls = []
@@ -284,8 +333,9 @@ def _create_header():
 
 def _create_layout_content(tree: Tree):
     """Create the complete layout content within Live update region."""
-    # Get queue progress
+    # Get queue progress and checkpoint status
     queue_progress = _create_queue_progress()
+    checkpoint_status = _create_checkpoint_status()
     
     # Create header
     header = _create_header()
@@ -299,16 +349,18 @@ def _create_layout_content(tree: Tree):
     hint_text = Align.center(Text("Press Ctrl+C to quit", style="dim"))
     footer = Group(hint_rule, hint_text)
     
-    # Main layout structure: queue, header, body, footer
+    # Main layout structure: checkpoint, queue, header, body, footer
     layout = Layout(name="root")
     layout.split(
-        Layout(name="queue", size=1),
+        Layout(name="checkpoint", size=1),
+        Layout(name="queue", size=3),
         Layout(name="header", size=3), 
         Layout(name="body"),
         Layout(name="footer", size=2)
     )
     
     # Update all sections
+    layout["checkpoint"].update(checkpoint_status)
     layout["queue"].update(queue_progress)
     layout["header"].update(header)
     layout["body"].split_row(Layout(name="left", ratio=1), Layout(name="right", ratio=1))

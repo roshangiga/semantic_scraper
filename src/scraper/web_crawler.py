@@ -604,8 +604,6 @@ class WebCrawler:
                 with open('crawler_checkpoint.json', 'r', encoding='utf-8') as f:
                     checkpoint = json.load(f)
                 semantic_queue = checkpoint.get('semantic_queue', [])
-                print(f"📥 Loaded checkpoint with {len(checkpoint['visited_urls'])} visited URLs, {len(semantic_queue)} semantic tasks")
-                sys.stdout.flush()
                 return set(checkpoint['visited_urls']), deque(checkpoint['crawl_queue']), semantic_queue
             except Exception as e:
                 print(f"⚠️ Could not load checkpoint: {e}")

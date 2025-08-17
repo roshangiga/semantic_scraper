@@ -325,6 +325,11 @@ class CrawlerOrchestrator:
             if os.path.exists('crawler_checkpoint.json'):
                 # Load checkpoint and restore semantic queue
                 visited_urls, crawl_queue, semantic_queue_data = crawler.load_checkpoint()
+                
+                # Display checkpoint status
+                semantic_tasks = len(semantic_queue_data) if semantic_queue_data else 0
+                print(f"📥 Loaded checkpoint with {len(visited_urls)} visited URLs, {semantic_tasks} semantic tasks")
+                
                 # Set the loaded data on the crawler
                 if visited_urls:
                     crawler.visited_urls = visited_urls
@@ -710,7 +715,7 @@ class CrawlerOrchestrator:
         rag_config = self.config.get('rag_upload', {})
         crawl_config = self.get_crawl4ai_config()
         
-        table = create_table("Configuration Summary")
+        table = create_table("⚙️ Configuration Summary")
         table.add_column("Item", style="cyan", width=28, no_wrap=True, overflow="ellipsis")
         table.add_column("Value", style="bright_blue", width=40, no_wrap=True, overflow="ellipsis")
         table.add_column("Details", style="dim white", no_wrap=True, overflow="ellipsis")
@@ -753,9 +758,7 @@ class CrawlerOrchestrator:
                 )
         
         # Requested options in single table
-        table.add_row("🔄 Remove duplicate lines", "True", "always enabled")
         table.add_row("📑 Remove duplicate files", str(markdown_processing.get('remove_duplicate_files', False)), "")
-        table.add_row("📄 Remove blank files", str(markdown_processing.get('remove_blank_files', False)), "")
         
         # RAG upload status
         if self.rag_uploader and self.rag_uploader.is_enabled():
@@ -764,11 +767,19 @@ class CrawlerOrchestrator:
             table.add_row("📤 RAG Upload", "Enabled", f"{client} • {mode}")
         else:
             table.add_row("📤 RAG Upload", "Disabled", "")
+        
+        # Semantic chunking configuration
+        chunking_config = self.config.get('contextual_chunking', {})
+        is_enabled = chunking_config.get('enabled', False)
+        if is_enabled:
+            provider = chunking_config.get('provider', 'gemini')
+            table.add_row("🧠 Semantic chunking", "Enabled", f"{provider.title()}")
+        else:
+            table.add_row("🧠 Semantic chunking", "Disabled", "")
 
         # Crawl configuration (merged)
         table.add_row("⚙  Crawl: max pages per domain", str(crawl_config.get('max_pages', 100)), "")
         table.add_row("⚙  Crawl: HTML capture delay", f"{crawl_config.get('delay_before_return_html', 2.5)}s", "JS settle time")
-        table.add_row("⚙  Crawl: bypass cache", str(crawl_config.get('bypass_cache', True)), "")
         table.add_row("⚙  Crawl: exclude sections (#)", str(crawl_config.get('exclude_section_urls', True)), "")
         table.add_row("⚙  Crawl: max retries", str(crawl_config.get('max_retries', 3)), "")
         table.add_row("⚙  Crawl: retry delay", f"{crawl_config.get('retry_delay', 5)}s", "")
@@ -1054,10 +1065,10 @@ class CrawlerOrchestrator:
             print("=" * 30)
             return
             
-        print_header("⚙️ Configuration Summary")
+        print_header("📋 Configuration Summary")
         
         # Create summary table
-        table = create_table("Configuration Overview")
+        table = create_table("⚙️ Configuration Overview")
         table.add_column("Setting", style="cyan")
         table.add_column("Value", style="green")
         
@@ -1072,12 +1083,10 @@ class CrawlerOrchestrator:
         table.add_row("📁 Pages directory", file_config.get('pages_output_dir', 'crawled_docling'))
         table.add_row("🗑️ Delete folders", str(file_config.get('delete_existing_folders', False)))
         
-        # Contextual chunking
+        # Semantic chunking configuration
         chunking_config = self.config.get('contextual_chunking', {})
         is_enabled = chunking_config.get('enabled', False)
-        table.add_row("🧠 Contextual chunking", "Enabled" if is_enabled else "Disabled")
-        if is_enabled:
-            table.add_row("🤖 Model", chunking_config.get('gemini_model', 'gemini-1.5-pro'))
+        table.add_row("🧠 Semantic chunking", "Enabled" if is_enabled else "Disabled")
         
         console.print(table)
         

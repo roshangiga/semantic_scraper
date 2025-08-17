@@ -296,13 +296,24 @@ def _create_upcoming_urls():
     
     return Panel(table, title="Upcoming URLs", title_align="left", border_style="grey50", padding=(1,1))
 
+def _get_next_url_from_queue():
+    """Get the first URL from the crawl queue."""
+    try:
+        import json
+        with open('crawler_checkpoint.json', 'r', encoding='utf-8') as f:
+            cp = json.load(f)
+        queue = cp.get('crawl_queue', []) or []
+        return queue[0] if queue else None
+    except Exception:
+        return None
+
 def _create_header():
-    """Create the header with URL and clock."""
+    """Create the header with next URL from queue and clock."""
     header_table = Table.grid(expand=True)
     header_table.add_column(ratio=3)
     header_table.add_column(justify="right", ratio=1)
     
-    # Left side: spinner + globe + URL
+    # Left side: spinner + globe + next URL from queue
     left_grid = Table.grid(padding=(0,0), expand=True)
     left_grid.add_column(width=2, no_wrap=True)
     left_grid.add_column(width=3, no_wrap=True)
@@ -316,7 +327,9 @@ def _create_header():
     def ellipsize_right(s: str, max_len: int) -> str:
         return s if len(s) <= max_len else (s[:max_len-1] + "…")
     
-    url_display = _current_url or _current_domain or "(no URL)"
+    # Get next URL from queue instead of current processing URL
+    next_url = _get_next_url_from_queue()
+    url_display = next_url or _current_domain or "(queue empty)"
     url_text = Text(ellipsize_right(str(url_display), max_url_len), style="bold bright_cyan", no_wrap=True, overflow="ellipsis")
     
     left_grid.add_row(
@@ -349,10 +362,9 @@ def _create_layout_content(tree: Tree):
     hint_text = Align.center(Text("Press Ctrl+C to quit", style="dim"))
     footer = Group(hint_rule, hint_text)
     
-    # Main layout structure: checkpoint, queue, header, body, footer
+    # Main layout structure: queue, header, body, footer (removed checkpoint)
     layout = Layout(name="root")
     layout.split(
-        Layout(name="checkpoint", size=1),
         Layout(name="queue", size=3),
         Layout(name="header", size=3), 
         Layout(name="body"),
@@ -360,7 +372,6 @@ def _create_layout_content(tree: Tree):
     )
     
     # Update all sections
-    layout["checkpoint"].update(checkpoint_status)
     layout["queue"].update(queue_progress)
     layout["header"].update(header)
     layout["body"].split_row(Layout(name="left", ratio=1), Layout(name="right", ratio=1))

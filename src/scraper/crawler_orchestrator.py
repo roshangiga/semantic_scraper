@@ -766,12 +766,12 @@ class CrawlerOrchestrator:
             table.add_row("📤 RAG Upload", "Disabled", "")
 
         # Crawl configuration (merged)
-        table.add_row("⚙️ Crawl: max pages per domain", str(crawl_config.get('max_pages', 100)), "")
-        table.add_row("⚙️ Crawl: HTML capture delay", f"{crawl_config.get('delay_before_return_html', 2.5)}s", "JS settle time")
-        table.add_row("⚙️ Crawl: bypass cache", str(crawl_config.get('bypass_cache', True)), "")
-        table.add_row("⚙️ Crawl: exclude sections (#)", str(crawl_config.get('exclude_section_urls', True)), "")
-        table.add_row("⚙️ Crawl: max retries", str(crawl_config.get('max_retries', 3)), "")
-        table.add_row("⚙️ Crawl: retry delay", f"{crawl_config.get('retry_delay', 5)}s", "")
+        table.add_row("⚙  Crawl: max pages per domain", str(crawl_config.get('max_pages', 100)), "")
+        table.add_row("⚙  Crawl: HTML capture delay", f"{crawl_config.get('delay_before_return_html', 2.5)}s", "JS settle time")
+        table.add_row("⚙  Crawl: bypass cache", str(crawl_config.get('bypass_cache', True)), "")
+        table.add_row("⚙  Crawl: exclude sections (#)", str(crawl_config.get('exclude_section_urls', True)), "")
+        table.add_row("⚙  Crawl: max retries", str(crawl_config.get('max_retries', 3)), "")
+        table.add_row("⚙  Crawl: retry delay", f"{crawl_config.get('retry_delay', 5)}s", "")
         
         console.print(table)
     

@@ -205,7 +205,7 @@ def _create_upcoming_urls():
         with open('crawler_checkpoint.json', 'r', encoding='utf-8') as f:
             cp = json.load(f)
         queue = cp.get('crawl_queue', []) or []
-        urls = queue[:20]  # Show 20 URLs
+        urls = queue[:19]  # Show 19 URLs
         remaining = max(0, len(queue) - len(urls))
     except Exception:
         urls = []

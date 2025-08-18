@@ -2,6 +2,11 @@
 
 Robust enterprise-grade web scraping application with crash recovery, semantic chunking, and RAG integration. Features automatic retry mechanisms, checkpoint system, duplicate removal, and intelligent content processing.
 
+
+![Crawler Configuration](Screenshot%202025-08-18%20215404.png)
+
+![Processing Results](Screenshot%202025-08-18%20215455.png)
+
 ## Process Flow
 
 ```

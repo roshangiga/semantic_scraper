@@ -429,10 +429,17 @@ def add_processing_step(tree: Tree, step_type: str, message: str, style: str = "
             node = parent.add(step_text)
             # Add vertical padding after
             parent.add(Text(" ", style="dim"))
-            # Update live display
+            # Update live display (reduced frequency to prevent duplicates)
             if _page_live is not None:
-                layout = _create_layout_content(tree)
-                _page_live.update(layout, refresh=True)
+                try:
+                    # Only update the tree content without recreating the entire layout
+                    body_left = Panel(tree, border_style="white", padding=(1,1))
+                    _page_live.layout["body"]["left"].update(body_left)
+                    _page_live.refresh()
+                except Exception:
+                    # Fallback to full layout update if partial update fails
+                    layout = _create_layout_content(tree)
+                    _page_live.update(layout, refresh=True)
             return node
         else:
             step_text.append(message, style="yellow")
@@ -468,10 +475,17 @@ def add_processing_step(tree: Tree, step_type: str, message: str, style: str = "
         file_table.add_row(left_text, Text(timing, style="dim") if timing else "")
         node = parent.add(file_table)
         
-        # Update live display
+        # Update live display (reduced frequency to prevent duplicates)
         if _page_live is not None:
-            layout = _create_layout_content(tree)
-            _page_live.update(layout, refresh=True)
+            try:
+                # Only update the tree content without recreating the entire layout
+                body_left = Panel(tree, border_style="white", padding=(1,1))
+                _page_live.layout["body"]["left"].update(body_left)
+                _page_live.refresh()
+            except Exception:
+                # Fallback to full layout update if partial update fails
+                layout = _create_layout_content(tree)
+                _page_live.update(layout, refresh=True)
         return node
     else:
         step_text.append(message, style=style)
@@ -479,10 +493,17 @@ def add_processing_step(tree: Tree, step_type: str, message: str, style: str = "
     # Add step to tree
     node = parent.add(step_text)
     
-    # Update live display
+    # Update live display (reduced frequency to prevent duplicates)
     if _page_live is not None:
-        layout = _create_layout_content(tree)
-        _page_live.update(layout, refresh=True)
+        try:
+            # Only update the tree content without recreating the entire layout
+            body_left = Panel(tree, border_style="white", padding=(1,1))
+            _page_live.layout["body"]["left"].update(body_left)
+            _page_live.refresh()
+        except Exception:
+            # Fallback to full layout update if partial update fails
+            layout = _create_layout_content(tree)
+            _page_live.update(layout, refresh=True)
     
     return node
 
@@ -502,10 +523,17 @@ def print_processing_tree_final(tree: Tree, page_num: int, domain: str = "unknow
     parent.add(completion_panel)
     parent.add(Text(" ", style="dim"))
     
-    # Update live display
+    # Update live display (reduced frequency to prevent duplicates)
     if _page_live is not None:
-        layout = _create_layout_content(tree)
-        _page_live.update(layout, refresh=True)
+        try:
+            # Only update the tree content without recreating the entire layout
+            body_left = Panel(tree, border_style="white", padding=(1,1))
+            _page_live.layout["body"]["left"].update(body_left)
+            _page_live.refresh()
+        except Exception:
+            # Fallback to full layout update if partial update fails
+            layout = _create_layout_content(tree)
+            _page_live.update(layout, refresh=True)
 
 def stop_page_live():
     """Stop and clear the persistent live page panel."""
